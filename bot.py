@@ -1,696 +1,3 @@
-# import os
-# import json
-# import requests
-# from datetime import datetime, timedelta
-# from typing import TypedDict, Annotated, Sequence, Optional
-# import operator
-# from langgraph.graph import StateGraph, END
-# from langgraph.checkpoint.memory import MemorySaver
-# from langgraph.prebuilt import ToolNode, tools_condition
-# from langchain_openai import ChatOpenAI
-# from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-# from langchain_core.tools import tool
-# from dotenv import load_dotenv
-# import dateparser
-# import re
-# from thefuzz import fuzz
-
-# load_dotenv()
-
-# os.environ["LANGCHAIN_TRACING_V2"] = "false"
-
-# AUTHID = os.getenv("AUTHID")
-# AUTHPASSSWORD = os.getenv("AUTHPASSSWORD")
-# BASE_URL = "https://api.aerocrs.com/v5"
-
-# llm = ChatOpenAI(
-#     model="gpt-4o-mini",
-#     temperature=0,
-#     max_tokens=500
-# )
-
-
-# # ─────────────────────────────────────────────
-# # STATE
-# # ─────────────────────────────────────────────
-
-# class FlightState(TypedDict):
-#     messages: Annotated[
-#         Sequence[HumanMessage | AIMessage | SystemMessage],
-#         operator.add
-#     ]
-#     # Flight details
-#     from_city: str
-#     to_city: str
-#     start_date: str
-#     end_date: str
-#     from_code: str
-#     to_code: str
-#     flights: bool
-#     round_trip: bool
-#     return_date: str
-#     adults: int
-#     child: int
-#     infant: int
-#     # Passenger details (for confirmation)
-#     pax_firstname: Optional[str]
-#     pax_lastname: Optional[str]
-#     pax_birthdate: Optional[str]   # YYYY/MM/DD
-#     pax_phone: Optional[str]
-#     pax_email: Optional[str]
-#     booking_confirmed: bool
-
-
-# # ─────────────────────────────────────────────
-# # HELPERS
-# # ─────────────────────────────────────────────
-
-# def normalize_date(date_text):
-#     if not date_text:
-#         return None
-#     today = datetime.today()
-#     parsed = dateparser.parse(
-#         date_text,
-#         settings={'PREFER_DATES_FROM': 'future', 'RELATIVE_BASE': today}
-#     )
-#     if not parsed:
-#         return None
-#     if parsed.date() < today.date():
-#         try:
-#             parsed = parsed.replace(year=parsed.year + 1)
-#         except ValueError:
-#             return "PAST_DATE"
-#     if parsed.date() < today.date():
-#         return "PAST_DATE"
-#     return parsed.strftime("%Y/%m/%d")
-
-
-# def normalize_birthdate(date_text):
-#     """Parse birthdate — allows past dates."""
-#     if not date_text:
-#         return None
-#     parsed = dateparser.parse(
-#         date_text,
-#         settings={'PREFER_DATES_FROM': 'past', 'RETURN_AS_TIMEZONE_AWARE': False}
-#     )
-#     if not parsed:
-#         return None
-#     return parsed.strftime("%Y/%m/%d")
-
-
-# def clean_text(text):
-#     text = text.lower()
-#     text = re.sub(r"[^a-z0-9 ]", " ", text)
-#     text = re.sub(r"\s+", " ", text).strip()
-#     return text
-
-
-# def match_airport_code(city_name, destinations):
-#     city_clean = clean_text(city_name)
-#     best_match = None
-#     best_score = 0
-#     for dest in destinations:
-#         name_clean = clean_text(dest["name"])
-#         code = dest["code"].lower()
-#         iata = dest.get("iatacode", "").lower()
-#         if city_clean in name_clean or city_clean == code or city_clean == iata:
-#             return dest["code"]
-#         city_words = city_clean.split()
-#         if all(word in name_clean for word in city_words):
-#             return dest["code"]
-#         first_word = name_clean.split()[0] if name_clean.split() else ""
-#         score = max(
-#             fuzz.partial_ratio(city_clean, name_clean),
-#             fuzz.partial_ratio(city_clean, first_word)
-#         )
-#         if score > best_score:
-#             best_score = score
-#             best_match = dest["code"]
-#     return best_match if best_score >= 60 else None
-
-
-# # ─────────────────────────────────────────────
-# # RAW API CALLS
-# # ─────────────────────────────────────────────
-
-# def _get_headers():
-#     return {
-#         "Content-Type": "application/json",
-#         "auth_id": AUTHID,
-#         "auth_password": AUTHPASSSWORD
-#     }
-
-
-# def api_get_destinations():
-#     r = requests.get(f"{BASE_URL}/getDestinations", headers=_get_headers())
-#     return r.json()
-
-
-# def api_get_availability(from_code, to_code, start_date, end_date):
-#     payload = {
-#         "aerocrs": {
-#             "parms": {
-#                 "dates": {"start": start_date, "end": end_date},
-#                 "destinations": {"from": from_code, "to": to_code}
-#             }
-#         }
-#     }
-#     r = requests.post(f"{BASE_URL}/getAvailability", headers=_get_headers(), json=payload)
-#     data = r.json()
-#     return data["aerocrs"]["flights"]["count"] > 0
-
-
-# def api_get_deeplink(from_code, to_code, start_date, adults=1, child=0, infant=0, end_date=None):
-#     params = {
-#         "from": from_code,
-#         "to": to_code,
-#         "start": start_date,
-#         "adults": adults,
-#         "child": child,
-#         "infant": infant
-#     }
-#     if end_date:
-#         params["end"] = end_date
-#     query = "&".join(f"{k}={v}" for k, v in params.items())
-#     url = f"{BASE_URL}/getDeepLink?{query}"
-#     r = requests.get(url, headers=_get_headers())
-#     return r.json()
-
-
-# def api_get_ancillaries(booking_id, flight_id):
-#     payload = {
-#         "aerocrs": {
-#             "parms": {
-#                 "bookingid": booking_id,
-#                 "flightid": flight_id,
-#                 "currency": "USD"
-#             }
-#         }
-#     }
-#     try:
-#         r = requests.post(f"{BASE_URL}/getAncillaries", headers=_get_headers(), json=payload)
-#         return r.json()
-#     except Exception as e:
-#         return {"error": str(e)}
-
-
-# def api_create_ancillary(booking_id, flight_id, item_id, pax_num=0):
-#     payload = {
-#         "aerocrs": {
-#             "parms": {
-#                 "ancillaries": {
-#                     "ancillary": [{
-#                         "paxnum": pax_num,
-#                         "itemid": item_id,
-#                         "bookingid": booking_id,
-#                         "flightid": flight_id
-#                     }]
-#                 }
-#             }
-#         }
-#     }
-#     try:
-#         r = requests.post(f"{BASE_URL}/createAncillary", headers=_get_headers(), json=payload)
-#         return r.json()
-#     except Exception as e:
-#         return {"error": str(e)}
-
-
-# def api_confirm_booking(booking_id, firstname, lastname, birthdate, phone, email):
-#     payload = {
-#         "aerocrs": {
-#             "parms": {
-#                 "bookingid": booking_id,
-#                 "agentconfirmation": "apiconnector",
-#                 "confirmationemail": email,
-#                 "passenger": [{
-#                     "paxtitle": "Mr.",
-#                     "firstname": firstname,
-#                     "lastname": lastname,
-#                     "paxage": None,
-#                     "paxnationailty": "US",
-#                     "paxdoctype": "PP",
-#                     "paxdocnumber": "9919239123",
-#                     "paxdocissuer": "US",
-#                     "paxdocexpiry": "2030/12/31",
-#                     "paxbirthdate": birthdate,
-#                     "paxphone": phone,
-#                     "paxemail": email
-#                 }]
-#             }
-#         }
-#     }
-#     try:
-#         r = requests.post(f"{BASE_URL}/confirmBooking", headers=_get_headers(), json=payload)
-#         return r.json()
-#     except Exception as e:
-#         return {"error": str(e)}
-
-
-# # ─────────────────────────────────────────────
-# # TOOLS
-# # ─────────────────────────────────────────────
-
-# @tool
-# def check_ancillaries(booking_id: int, flight_id: int) -> dict:
-#     """Check available ancillary extras (baggage, seats, meals) for a booking.
-#     Call immediately after a booking is created.
-#     If result has available_count=0, skip asking about extras and go straight to passenger details."""
-#     result = api_get_ancillaries(booking_id, flight_id)
-#     # Normalise the response so the LLM gets a clear signal
-#     try:
-#         aerocrs = result.get("aerocrs", {})
-#         # Response shape: {"aerocrs": {"success": true, "ancillaries": []}}
-#         # ancillaries can be [] (empty list) or a list of items
-#         ancillaries = aerocrs.get("ancillaries", [])
-#         if not ancillaries:
-#             return {"available": False, "available_count": 0, "items": []}
-#         return {"available": True, "available_count": len(ancillaries), "items": ancillaries}
-#     except Exception:
-#         return {"available": False, "available_count": 0, "items": []}
-
-
-# @tool
-# def add_ancillary(booking_id: int, flight_id: int, item_id: int, pax_num: int = 0) -> dict:
-#     """Add an ancillary extra to a booking using item_id from check_ancillaries.
-#     Only call this if check_ancillaries returned available=True."""
-#     return api_create_ancillary(booking_id, flight_id, item_id, pax_num)
-
-
-# @tool
-# def confirm_booking(
-#     booking_id: int,
-#     firstname: str,
-#     lastname: str,
-#     birthdate: str,
-#     phone: str,
-#     email: str
-# ) -> dict:
-#     """Confirm a booking with passenger details.
-#     Only call when you have ALL of: firstname, lastname, birthdate (YYYY/MM/DD), phone, email.
-#     Do NOT tell the user the booking is confirmed until this tool returns a success response."""
-#     return api_confirm_booking(booking_id, firstname, lastname, birthdate, phone, email)
-
-
-# tools = [check_ancillaries, add_ancillary, confirm_booking]
-# llm_with_tools = llm.bind_tools(tools)
-
-
-# # ─────────────────────────────────────────────
-# # FORMAT
-# # ─────────────────────────────────────────────
-
-# def format_deeplink_results(data, state):
-#     try:
-#         flights = data["aerocrs"]["flights"]["flight"]
-#     except Exception:
-#         return "No flights available."
-
-#     outbound = [f for f in flights if f.get("direction") == "outbound"]
-#     inbound = [f for f in flights if f.get("direction") == "inbound"]
-#     structured_data = []
-
-#     def process_flights(flight_list, direction_label):
-#         for f in flight_list:
-#             cheapest = min(f["classes"].values(), key=lambda c: float(c["fare"]["adultFare"]))
-#             structured_data.append({
-#                 "direction": direction_label,
-#                 "flight_code": f["flightcode"],
-#                 "flight_number": f["fltnum"],
-#                 "flight_type": f["flighttype"],
-#                 "origin": state["from_city"].title(),
-#                 "destination": state["to_city"].title(),
-#                 "start_time": f["STD"][5:16],
-#                 "end_time": f["STA"][5:16],
-#                 "via": f["via"] if f.get("via") else None,
-#                 "price": cheapest["fare"]["adultFare"],
-#                 "tax": cheapest["fare"]["tax"],
-#                 "seats": cheapest["freeseats"],
-#                 "classes": f["classes"]
-#             })
-
-#     if outbound:
-#         process_flights(outbound, "Outbound")
-#     if inbound:
-#         process_flights(inbound, "Return")
-
-#     return json.dumps({
-#         "type": "flight_results",
-#         "header": f"✈️  {state['from_city'].title()} → {state['to_city'].title()}",
-#         "sub_header": f"👥  {state.get('adults', 1)} Adult(s)",
-#         "context": {
-#             "from_code": state.get("from_code"),
-#             "to_code": state.get("to_code"),
-#             "adults": state.get("adults", 1),
-#             "child": state.get("child", 0),
-#             "infant": state.get("infant", 0),
-#             "triptype": "RT" if state.get("round_trip") else "OW"
-#         },
-#         "data": structured_data
-#     })
-
-
-# # ─────────────────────────────────────────────
-# # NODES
-# # ─────────────────────────────────────────────
-
-# def conversation_node(state: FlightState):
-#     system_prompt = """You are a friendly flight booking assistant. Be brief and natural — no bullet lists, no formal tone.
-# - ask one question at a time
-# FLOW:
-# 1. Collect: from city, to city, date, passengers, one-way or round trip. Ask one thing at a time.
-# 2. Flight results are shown in the UI — wait for user to pick a flight and fare class. Do NOT ask for passenger details yet. Just wait.
-# 3. ONLY after receiving a system message that contains "BookingID" and "FlightID":
-#    - Immediately call check_ancillaries with those exact IDs.
-#    - If extras available, mention them casually. Add with add_ancillary if user wants.
-#    - Once extras done (or none), THEN ask for passenger info in one casual message.
-#      Example: "Quick — full name, date of birth, phone, and email?"
-# 4. Once you have all 4, call confirm_booking.
-# 5. Only say booking is confirmed AFTER confirm_booking returns success.
-
-# CRITICAL:
-# - NEVER ask for name/dob/phone/email before you see a BookingID system message.
-# - User selects flight and class from the UI — you never need to ask about fare class.
-# - No bullet points. Short and natural.
-# - Only ask for missing info, never repeat what you already have.
-# """
-
-#     def trim_message(m):
-#         """Keep messages lean for LLM context. Never crash — always return a valid message."""
-#         try:
-#             if isinstance(m, AIMessage):
-#                 c = m.content
-#                 # String content: strip heavy flight JSON
-#                 if isinstance(c, str) and '"type": "flight_results"' in c:
-#                     return AIMessage(
-#                         content="[Flight options were displayed to the user]",
-#                         tool_calls=m.tool_calls if hasattr(m, "tool_calls") else []
-#                     )
-#                 # List content (tool_calls block): pass through as-is
-#                 return m
-#             if isinstance(m, ToolMessage):
-#                 raw = m.content if isinstance(m.content, str) else json.dumps(m.content)
-#                 if "available_count" in raw:
-#                     data = json.loads(raw)
-#                     trimmed = {
-#                         "available": data.get("available", False),
-#                         "available_count": data.get("available_count", 0),
-#                         "items": data.get("items", [])[:3]
-#                     }
-#                     return ToolMessage(content=json.dumps(trimmed), tool_call_id=m.tool_call_id)
-#         except Exception:
-#             pass
-#         return m
-
-#     # Use smaller window once flights are confirmed — passenger phase needs less context
-#     window = -6 if state.get("flights") else -12
-
-#     clean_msgs = [
-#         trim_message(m)
-#         for m in state["messages"][window:]
-#         if isinstance(m, (HumanMessage, SystemMessage, AIMessage, ToolMessage))
-#     ]
-
-#     response = llm_with_tools.invoke([SystemMessage(content=system_prompt)] + clean_msgs)
-
-#     return {**state, "messages": state["messages"] + [response]}
-
-
-# def extraction_node(state: FlightState):
-#     today = datetime.today().strftime("%Y-%m-%d")
-
-#     already_known = {
-#         "from_city": state.get("from_city"),
-#         "to_city": state.get("to_city"),
-#         "start_date": state.get("start_date"),
-#         "adults": state.get("adults"),
-#         "child": state.get("child"),
-#         "infant": state.get("infant"),
-#         "round_trip": state.get("round_trip"),
-#         "return_date": state.get("return_date"),
-#         "pax_firstname": state.get("pax_firstname"),
-#         "pax_lastname": state.get("pax_lastname"),
-#         "pax_birthdate": state.get("pax_birthdate"),
-#         "pax_phone": state.get("pax_phone"),
-#         "pax_email": state.get("pax_email"),
-#     }
-
-#     prompt = f"""Extract ALL details from this conversation — both flight info AND passenger info.
-# Today is {today}.
-# Already collected: {json.dumps(already_known)}
-
-# FLIGHT RULES:
-# - Only extract explicitly mentioned values. Never assume.
-# - Never default adults to 1 unless user said "just me", "1 adult", or "solo".
-# - round_trip: true only if user said yes to round trip. false only if user said no/one way. else null.
-# - If a field is already known and unchanged, return null.
-
-# PASSENGER RULES:
-# - pax_firstname / pax_lastname: extract from full name. e.g. "arsh khan" → firstname=arsh, lastname=khan.
-#   If only one name given, put it in firstname, lastname=null.
-# - pax_birthdate: any date of birth mentioned. Can be past. e.g. "27 nov 2004" → "2004/11/27"
-# - pax_phone: any phone/mobile number mentioned.
-# - pax_email: any email address mentioned.
-# - If already collected and not changed, return null.
-
-# Return JSON only:
-# {{
-#   "from_city": null,
-#   "to_city": null,
-#   "start_date": null,
-#   "adults": null,
-#   "child": null,
-#   "infant": null,
-#   "round_trip": null,
-#   "return_date": null,
-#   "pax_firstname": null,
-#   "pax_lastname": null,
-#   "pax_birthdate": null,
-#   "pax_phone": null,
-#   "pax_email": null
-# }}"""
-
-#     clean_messages = []
-#     for m in state["messages"][-10:]:
-#         if isinstance(m, HumanMessage):
-#             clean_messages.append(f"User: {m.content}")
-#         elif isinstance(m, AIMessage) and m.content and isinstance(m.content, str) and m.content.strip():
-#             clean_messages.append(f"Assistant: {m.content}")
-
-#     convo = "\n".join(clean_messages)
-#     response = llm.invoke([HumanMessage(content=prompt + "\n\n" + convo)])
-
-#     try:
-#         raw = response.content.strip()
-#         if raw.startswith("```"):
-#             raw = re.sub(r"```[a-z]*\n?", "", raw).strip().rstrip("```").strip()
-#         data = json.loads(raw)
-#     except Exception:
-#         return state
-
-#     print("DEBUG extracted:", data)
-#     updates = {}
-
-#     # ── Flight fields ──
-#     if data.get("from_city"):
-#         updates["from_city"] = data["from_city"]
-#     if data.get("to_city"):
-#         updates["to_city"] = data["to_city"]
-
-#     if data.get("start_date"):
-#         normalized_start = normalize_date(data["start_date"])
-#         if normalized_start == "PAST_DATE":
-#             return {
-#                 **state,
-#                 "messages": state["messages"] + [AIMessage(content="That date is in the past — pick a future date!")]
-#             }
-#         if normalized_start:
-#             updates["start_date"] = normalized_start
-
-#     if updates.get("start_date"):
-#         start_dt = datetime.strptime(updates["start_date"], "%Y/%m/%d")
-#         updates["end_date"] = (start_dt + timedelta(days=7)).strftime("%Y/%m/%d")
-
-#     if data.get("adults") is not None:
-#         updates["adults"] = data["adults"]
-#     if data.get("child") is not None:
-#         updates["child"] = data["child"]
-#     if data.get("infant") is not None:
-#         updates["infant"] = data["infant"]
-#     if data.get("round_trip") is not None:
-#         updates["round_trip"] = data["round_trip"]
-#     if data.get("return_date"):
-#         norm = normalize_date(data["return_date"])
-#         if norm and norm != "PAST_DATE":
-#             updates["return_date"] = norm
-
-#     # ── Passenger fields ──
-#     if data.get("pax_firstname"):
-#         updates["pax_firstname"] = data["pax_firstname"]
-#     if data.get("pax_lastname"):
-#         updates["pax_lastname"] = data["pax_lastname"]
-#     if data.get("pax_birthdate"):
-#         bd = normalize_birthdate(data["pax_birthdate"])
-#         if bd:
-#             updates["pax_birthdate"] = bd
-#     if data.get("pax_phone"):
-#         updates["pax_phone"] = str(data["pax_phone"])
-#     if data.get("pax_email"):
-#         updates["pax_email"] = data["pax_email"]
-
-#     # ── Reset logic ──
-#     route_changed = (
-#         (updates.get("from_city") and updates["from_city"] != state.get("from_city")) or
-#         (updates.get("to_city") and updates["to_city"] != state.get("to_city"))
-#     )
-#     date_changed = updates.get("start_date") and updates["start_date"] != state.get("start_date")
-
-#     if route_changed:
-#         updates["from_code"] = None
-#         updates["to_code"] = None
-#         updates["flights"] = False
-
-#     if date_changed:
-#         updates["flights"] = False
-#         updates["return_date"] = None
-
-#     if route_changed and date_changed:
-#         updates["round_trip"] = None
-#         updates["return_date"] = None
-
-#     return {**state, **updates}
-
-
-# def flight_search_node(state: FlightState):
-#     if not all([state.get("from_city"), state.get("to_city"), state.get("start_date"), state.get("end_date")]):
-#         return state
-
-#     if not state.get("from_code") or not state.get("to_code"):
-#         destinations_data = api_get_destinations()
-#         try:
-#             dest_list = destinations_data["aerocrs"]["destinations"]["destination"]
-#         except Exception:
-#             return {**state, "messages": state["messages"] + [AIMessage(content="Couldn't fetch destinations, please try again.")]}
-
-#         if not state.get("from_code"):
-#             from_code = match_airport_code(state["from_city"], dest_list)
-#             if not from_code:
-#                 return {**state, "messages": state["messages"] + [AIMessage(content=f"Couldn't find '{state['from_city']}' as a departure city.")]}
-#             state = {**state, "from_code": from_code}
-
-#         if not state.get("to_code"):
-#             to_code = match_airport_code(state["to_city"], dest_list)
-#             if not to_code:
-#                 return {**state, "messages": state["messages"] + [AIMessage(content=f"Couldn't find '{state['to_city']}' as a destination.")]}
-#             state = {**state, "to_code": to_code}
-
-#     has_flights = api_get_availability(
-#         state["from_code"], state["to_code"], state["start_date"], state["end_date"]
-#     )
-
-#     if not has_flights:
-#         return {**state, "flights": False, "messages": state["messages"] + [AIMessage(content="No flights found for this route and date.")]}
-
-#     if state.get("adults") is None:
-#         return {**state, "flights": False, "messages": state["messages"] + [AIMessage(content="How many passengers? (adults / kids / infants)")]}
-
-#     if state.get("round_trip") is None:
-#         return {**state, "flights": False, "messages": state["messages"] + [AIMessage(content="One way or round trip?")]}
-
-#     if state.get("round_trip") and not state.get("return_date"):
-#         return {**state, "flights": False, "messages": state["messages"] + [AIMessage(content="What's your return date?")]}
-
-#     deeplink_data = api_get_deeplink(
-#         from_code=state["from_code"],
-#         to_code=state["to_code"],
-#         start_date=state["start_date"],
-#         adults=state.get("adults", 1),
-#         child=state.get("child", 0),
-#         infant=state.get("infant", 0),
-#         end_date=state.get("return_date") if state.get("round_trip") else None
-#     )
-
-#     summary = format_deeplink_results(deeplink_data, state)
-
-#     return {
-#         **state,
-#         "from_code": state["from_code"],
-#         "to_code": state["to_code"],
-#         "flights": True,
-#         "messages": state["messages"] + [AIMessage(content=summary)]
-#     }
-
-
-# # ─────────────────────────────────────────────
-# # ROUTING
-# # ─────────────────────────────────────────────
-
-# def should_search(state: FlightState):
-#     if all([state.get("from_city"), state.get("to_city"), state.get("start_date"), state.get("end_date")]):
-#         if state.get("flights") is not True:
-#             return "search"
-#     return "continue"
-
-
-# # ─────────────────────────────────────────────
-# # GRAPH
-# # ─────────────────────────────────────────────
-
-# def create_graph():
-#     workflow = StateGraph(FlightState)
-
-#     workflow.add_node("conversation", conversation_node)
-#     workflow.add_node("extract", extraction_node)
-#     workflow.add_node("search", flight_search_node)
-#     workflow.add_node("tools", ToolNode(tools))
-
-#     workflow.set_entry_point("conversation")
-
-#     workflow.add_conditional_edges(
-#         "conversation",
-#         tools_condition,
-#         {"tools": "tools", END: "extract"}
-#     )
-
-#     workflow.add_edge("tools", "conversation")
-
-#     workflow.add_conditional_edges(
-#         "extract",
-#         should_search,
-#         {"search": "search", "continue": END}
-#     )
-
-#     workflow.add_edge("search", END)
-
-#     memory = MemorySaver()
-#     return workflow.compile(checkpointer=memory)
-
-
-# # ─────────────────────────────────────────────
-# # MAIN
-# # ─────────────────────────────────────────────
-
-# def main():
-#     graph = create_graph()
-#     thread_id = "flight-thread-1"
-#     print("Flight assistant ready. Type 'quit' to exit.\n")
-
-#     while True:
-#         user_input = input("You: ").strip()
-#         if user_input.lower() in ["quit", "exit"]:
-#             break
-#         result = graph.invoke(
-#             {"messages": [HumanMessage(content=user_input)]},
-#             config={"configurable": {"thread_id": thread_id}}
-#         )
-#         last = result["messages"][-1]
-#         print("Assistant:", last.content if hasattr(last, "content") else str(last), "\n")
-
-
-# if __name__ == "__main__":
-#     main()
-
-
 import os
 import json
 import requests
@@ -723,13 +30,17 @@ llm = ChatOpenAI(
 )
 
 
-
+# ─────────────────────────────────────────────
+# STATE — lean, single source of truth
+# ─────────────────────────────────────────────
 
 class FlightState(TypedDict):
     messages: Annotated[Sequence[HumanMessage | AIMessage | SystemMessage | ToolMessage], operator.add]
 
 
-
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
 
 def normalize_date(date_text: str, allow_past: bool = False) -> Optional[str]:
     """Parse natural language date → YYYY/MM/DD. Returns None or 'PAST_DATE'."""
@@ -744,7 +55,7 @@ def normalize_date(date_text: str, allow_past: bool = False) -> Optional[str]:
     if not parsed:
         return None
     if not allow_past and parsed.date() < today.date():
-
+        # Try bumping year
         try:
             parsed = parsed.replace(year=parsed.year + 1)
         except ValueError:
@@ -800,7 +111,9 @@ def _match_airport_code(city_name: str, destinations: list) -> Optional[str]:
     return best_match if best_score >= 60 else None
 
 
-
+# ─────────────────────────────────────────────
+# TOOLS — ALL logic lives here now
+# ─────────────────────────────────────────────
 
 @tool
 def search_destinations(query: str) -> dict:
@@ -822,7 +135,7 @@ def search_destinations(query: str) -> dict:
         matched = next((d for d in dest_list if d["code"] == code), {})
         return {"found": True, "code": code, "name": matched.get("name", query)}
 
-
+    # Return similar options to help clarify
     query_clean = clean_text(query)
     similar = []
     for dest in dest_list:
@@ -858,14 +171,14 @@ def check_flight_availability(
     Returns:
         Structured flight results JSON for the UI, or an error message.
     """
-
+    # Parse + validate dates
     dep_date = normalize_date(travel_date)
     if not dep_date or dep_date == "PAST_DATE":
         return {"error": "Departure date is invalid or in the past. Please provide a future date."}
 
     end_date = (datetime.strptime(dep_date, "%Y/%m/%d") + timedelta(days=7)).strftime("%Y/%m/%d")
 
-
+    # Availability check
     try:
         payload = {
             "aerocrs": {
@@ -883,7 +196,7 @@ def check_flight_availability(
     except Exception as e:
         return {"error": f"Availability check failed: {e}"}
 
-
+    # Fetch deeplink flights
     try:
         params = {
             "from": from_code, "to": to_code,
@@ -902,7 +215,7 @@ def check_flight_availability(
     except Exception as e:
         return {"error": f"Could not retrieve flight details: {e}"}
 
-
+    # Format results
     outbound = [f for f in flights if f.get("direction") == "outbound"]
     inbound = [f for f in flights if f.get("direction") == "inbound"]
     structured = []
@@ -970,13 +283,87 @@ def check_ancillaries(booking_id: int, flight_id: int) -> dict:
             }
         }
         r = requests.post(f"{BASE_URL}/getAncillaries", headers=_get_headers(), json=payload)
-        aerocrs = r.json().get("aerocrs", {})
-        items = aerocrs.get("ancillaries", [])
-        if not items:
-            return {"available": False, "available_count": 0, "items": []}
-        return {"available": True, "available_count": len(items), "items": items}
+        raw_json = r.json()
+        print(f"[ANCILLARIES RAW] booking={booking_id} flight={flight_id} → {json.dumps(raw_json)[:1500]}")
+
+        aerocrs = raw_json.get("aerocrs", {})
+
+        # Real API shape:
+        # {"aerocrs": {"ancillaries": {"ancillary": [
+        #   {"name": "WHEELCHAIR SERVICE", "description": "...", "groupname": "...",
+        #    "items": [{"itemid": "17520", "itemname": "Wheelchair service charge",
+        #               "fare": {"adult": "25.00"}, ...}]}
+        # ]}}}
+        ancillaries_block = aerocrs.get("ancillaries") or {}
+        if isinstance(ancillaries_block, list):
+            groups = ancillaries_block
+        elif isinstance(ancillaries_block, dict):
+            raw_anc = ancillaries_block.get("ancillary") or []
+            groups = raw_anc if isinstance(raw_anc, list) else [raw_anc]
+        else:
+            groups = []
+
+        normalised = []
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            group_name = group.get("groupname") or group.get("name") or "Add-on"
+            group_desc = group.get("name") or group.get("description") or ""
+
+            # Each group has sub-items with itemid + fare
+            sub_items = group.get("items") or []
+            if isinstance(sub_items, dict):
+                sub_items = [sub_items]
+
+            if sub_items:
+                for sub in sub_items:
+                    if not isinstance(sub, dict):
+                        continue
+                    fare = sub.get("fare") or {}
+                    if isinstance(fare, str):
+                        price = fare or "0"
+                    else:
+                        price = fare.get("adult") or fare.get("adultFare") or sub.get("price") or "0"
+                    normalised.append({
+                        "itemid": sub.get("itemid") or sub.get("id"),
+                        "name": sub.get("itemname") or sub.get("name") or group_desc or "Extra",
+                        "category": group_name,
+                        "price": str(price),
+                        "currency": "USD",
+                        "description": group.get("description") or "",
+                    })
+            else:
+                # Group itself is the purchasable item
+                fare = group.get("fare") or {}
+                if isinstance(fare, str):
+                    price = fare or "0"
+                else:
+                    price = fare.get("adult") or fare.get("adultFare") or group.get("price") or "0"
+                normalised.append({
+                    "itemid": group.get("itemid") or group.get("id"),
+                    "name": group_desc or group_name,
+                    "category": group_name,
+                    "price": str(price),
+                    "currency": "USD",
+                    "description": group.get("description") or "",
+                })
+
+        if not normalised:
+            print(f"[ANCILLARIES] No items parsed for booking={booking_id}")
+            return {"type": "ancillary_results", "available": False, "available_count": 0, "items": []}
+
+        print(f"[ANCILLARIES] {len(normalised)} items found")
+        return {
+            "type": "ancillary_results",
+            "available": True,
+            "available_count": len(normalised),
+            "items": normalised,
+            "booking_id": booking_id,
+            "flight_id": flight_id
+        }
     except Exception as e:
-        return {"available": False, "available_count": 0, "error": str(e)}
+        print(f"[ANCILLARIES ERROR] {e}")
+        return {"type": "ancillary_results", "available": False, "available_count": 0, "error": str(e)}
 
 
 @tool
@@ -1072,6 +459,9 @@ tools = [search_destinations, check_flight_availability, check_ancillaries, add_
 llm_with_tools = llm.bind_tools(tools)
 
 
+# ─────────────────────────────────────────────
+# SYSTEM PROMPT
+# ─────────────────────────────────────────────
 
 SYSTEM_PROMPT = f"""You are Aria, a warm and natural flight booking assistant. You speak like a helpful human — conversational, clear, and friendly. No bullet lists unless absolutely necessary. Never robotic.
 
@@ -1084,14 +474,12 @@ You have 5 tools. Use them intelligently:
 3. `check_ancillaries` — Check for add-ons (baggage, meals) right after a booking is created.
 4. `add_ancillary` — Add an extra if the user wants one.
 5. `confirm_booking` — Finalize the booking once you have ALL passenger details.
-- ask only one thing at a time
 
 ## CONVERSATION FLOW
 
 ### Phase 1: Gather flight details (ask one thing at a time if unclear)
 Collect: departure city, arrival city, travel date, number of passengers (adults/children/infants), and one-way vs round trip.
-- ask one question at a time
-- dont proceed to next step unless you have all the details like origin, destination, date, passenger count, and trip type.
+
 SMART CLARIFICATION RULES:
 - If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
 - If user says "tomorrow" for date, that's fine — use it.
@@ -1125,6 +513,9 @@ Only announce success AFTER the tool returns a successful response.
 """
 
 
+# ─────────────────────────────────────────────
+# NODES
+# ─────────────────────────────────────────────
 
 def conversation_node(state: FlightState) -> FlightState:
     """Main LLM node — decides what to say or which tool to call."""
@@ -1140,7 +531,6 @@ def conversation_node(state: FlightState) -> FlightState:
             if isinstance(m, ToolMessage):
                 content = m.content if isinstance(m.content, str) else json.dumps(m.content)
                 if '"type": "flight_results"' in content:
-
                     try:
                         data = json.loads(content)
                         flights = data.get("data", [])
@@ -1155,18 +545,42 @@ def conversation_node(state: FlightState) -> FlightState:
                         return ToolMessage(content=json.dumps(data), tool_call_id=m.tool_call_id)
                     except Exception:
                         pass
+                if '"type": "ancillary_results"' in content:
+                    try:
+                        data = json.loads(content)
+                        slim = {
+                            "type": "ancillary_results",
+                            "available": data.get("available"),
+                            "available_count": data.get("available_count"),
+                            "booking_id": data.get("booking_id"),
+                            "flight_id": data.get("flight_id"),
+                            "items": [
+                                {"itemid": i.get("itemid"), "name": i.get("name"),
+                                 "price": i.get("price"), "category": i.get("category")}
+                                for i in data.get("items", [])[:6]
+                            ]
+                        }
+                        return ToolMessage(content=json.dumps(slim), tool_call_id=m.tool_call_id)
+                    except Exception:
+                        pass
         except Exception:
             pass
         return m
 
-   
+    # Build a safe message window for OpenAI.
+    # OpenAI enforces two rules:
+    #   1. Every ToolMessage must follow an AIMessage that contains its tool_call_id
+    #   2. Every AIMessage with tool_calls must be followed by ToolMessages for ALL its call IDs
+    # Violating either causes a 400. The safest approach: take recent messages,
+    # then drop any incomplete tool_call groups from either end.
 
     all_msgs = list(state["messages"])
 
-
+    # Step 1: trim each message payload (does NOT remove any messages)
     trimmed = [trim_message(m) for m in all_msgs]
 
-
+    # Step 2: find tool_call groups — an AIMessage with tool_calls + its ToolMessage responses
+    # Walk the full history and mark indices that form complete groups
     def is_complete_window(msgs):
         """Return True if msgs has no broken tool_call groups."""
         pending_ids = set()
@@ -1181,28 +595,33 @@ def conversation_node(state: FlightState) -> FlightState:
                 pending_ids.discard(m.tool_call_id)
         return len(pending_ids) == 0
 
-
+    # Step 3: start from the last 30 messages, then advance start until window is valid
     window = trimmed[-30:]
 
-
+    # Advance start past any incomplete leading tool group
     for start in range(len(window)):
         candidate = window[start:]
-
+        # Skip if first message is a ToolMessage (orphaned)
         if isinstance(candidate[0], ToolMessage):
             continue
-
+        # Skip if first message is an AIMessage with tool_calls (response will be cut off)
         if isinstance(candidate[0], AIMessage) and getattr(candidate[0], "tool_calls", []):
             continue
+        # Check the whole candidate is clean
         if is_complete_window(candidate):
             window = candidate
             break
     else:
+        # Fallback: just use the last 6 messages — enough for immediate context
         window = trimmed[-6:]
 
     response = llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT)] + window)
     return {"messages": [response]}
 
 
+# ─────────────────────────────────────────────
+# GRAPH
+# ─────────────────────────────────────────────
 
 def create_graph():
     workflow = StateGraph(FlightState)
@@ -1212,19 +631,23 @@ def create_graph():
 
     workflow.set_entry_point("conversation")
 
+    # After conversation: if tool called → go to tools, else END
     workflow.add_conditional_edges(
         "conversation",
         tools_condition,
         {"tools": "tools", END: END}
     )
 
+    # After tools: always return to conversation for follow-up
     workflow.add_edge("tools", "conversation")
 
     memory = MemorySaver()
     return workflow.compile(checkpointer=memory)
 
 
-
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
 
 def main():
     graph = create_graph()
@@ -1248,6 +671,7 @@ def main():
         last = result["messages"][-1]
         content = last.content if hasattr(last, "content") else str(last)
 
+        # Pretty-print flight results JSON if present
         if isinstance(content, str) and '"type": "flight_results"' in content:
             try:
                 data = json.loads(content)

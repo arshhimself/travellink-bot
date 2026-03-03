@@ -330,7 +330,7 @@ def check_ancillaries(booking_id: int, flight_id: int) -> dict:
                         "category": group_name,
                         "price": str(price),
                         "currency": "USD",
-                        "description": group.get("description") or "",
+                        "description": group.get("description") or group_desc or "",
                     })
             else:
                 # Group itself is the purchasable item
@@ -487,7 +487,7 @@ SMART CLARIFICATION RULES:
 - Never assume adults=1 unless user explicitly said "just me", "solo", or "1 adult".
 - If round trip: also ask for return date before searching.
 - Validate cities with `search_destinations` before calling `check_flight_availability`.
-
+    
 ### Phase 2: Show flights
 Once you have everything, call `check_flight_availability`.
 IMPORTANT: Flight results are automatically rendered as interactive cards in the UI — do NOT list, describe, or summarise the flights in text.

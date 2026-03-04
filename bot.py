@@ -17,17 +17,18 @@ from thefuzz import fuzz
 
 load_dotenv()
 
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 
 AUTHID = os.getenv("AUTHID")
 AUTHPASSSWORD = os.getenv("AUTHPASSSWORD")
 BASE_URL = "https://api.aerocrs.com/v5"
 
-llm = ChatOpenAI(
-    model="gpt-4o",
-    temperature=0.2,
-    max_tokens=800
-)
+# Model tiering — cheap model for simple Q&A, full model for complex phases
+llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, max_tokens=500)
+llm_full = ChatOpenAI(model="gpt-4o", temperature=0.2, max_tokens=800)
+
+# Context window size — keep small to save tokens
+MAX_CONTEXT_MESSAGES = 16
 
 
 # ─────────────────────────────────────────────
@@ -455,92 +456,131 @@ def confirm_booking(
         return {"error": str(e)}
 
 
-tools = [search_destinations, check_flight_availability, check_ancillaries, add_ancillary, confirm_booking]
-llm_with_tools = llm.bind_tools(tools)
+# All tools — ToolNode needs the full set so it can execute any tool the LLM picks
+ALL_TOOLS = [search_destinations, check_flight_availability, check_ancillaries, add_ancillary, confirm_booking]
+
+# Phase → tool subset mapping (only these schemas are sent to the LLM)
+PHASE_TOOLS = {
+    "gathering":    [search_destinations, check_flight_availability],
+    "searching":    [search_destinations, check_flight_availability],
+    "post_booking": [check_ancillaries, add_ancillary, confirm_booking],
+}
+
+# Phase → model mapping (use cheaper model for simple exchanges)
+PHASE_MODEL = {
+    "gathering":    llm_mini,
+    "searching":    llm_mini,
+    "post_booking": llm_mini,
+}
 
 
 # ─────────────────────────────────────────────
-# SYSTEM PROMPT
+# PHASE DETECTION
 # ─────────────────────────────────────────────
 
-SYSTEM_PROMPT = f"""You are Aria, a warm and natural flight booking assistant. You speak like a helpful human — conversational, clear, and friendly. No bullet lists unless absolutely necessary. Never robotic.
-
-Today's date: {datetime.today().strftime("%A, %B %d, %Y")}
-
-## YOUR TOOLS
-You have 5 tools. Use them intelligently:
-1. `search_destinations` — Validate city names and get airport codes. Use this before searching flights if you're unsure about a city name.
-2. `check_flight_availability` — Fetch available flights once you have: origin, destination, date, passenger count, and trip type.
-3. `check_ancillaries` — Check for add-ons (baggage, meals) right after a booking is created.
-4. `add_ancillary` — Add an extra if the user wants one.
-5. `confirm_booking` — Finalize the booking once you have ALL passenger details.
-
-## CONVERSATION FLOW
-
-### Phase 1: Gather flight details (ask one thing at a time if unclear)
-Collect: departure city, arrival city, travel date, number of passengers (adults/children/infants), and one-way vs round trip.
-
-SMART CLARIFICATION RULES:
-- If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
-- If user says "tomorrow" for date, that's fine — use it.
-- If user says a city that's ambiguous, call `search_destinations` and ask to confirm.
-- Never assume adults=1 unless user explicitly said "just me", "solo", or "1 adult".
-- If round trip: also ask for return date before searching.
-- Validate cities with `search_destinations` before calling `check_flight_availability`.
+def detect_phase(messages: list) -> str:
+    """Scan recent messages to determine conversation phase.
     
-### Phase 2: Show flights
-Once you have everything, call `check_flight_availability`.
-IMPORTANT: Flight results are automatically rendered as interactive cards in the UI — do NOT list, describe, or summarise the flights in text.
-After calling the tool, say ONLY something brief like: "Here you go! Pick a flight and fare class from the cards and I'll get you booked." Then WAIT.
-Do not ask for passenger details yet.
+    Returns one of: 'gathering', 'searching', 'post_booking'
+    """
+    has_booking_id = False
+    has_flight_results = False
+    
+    # Scan in reverse for efficiency — most recent signals matter most
+    for msg in reversed(messages[-20:]):
+        content = getattr(msg, "content", "")
+        if isinstance(content, dict):
+            content = json.dumps(content)
+        if not isinstance(content, str):
+            content = str(content)
+        
+        content_lower = content.lower()
+        
+        # BookingID in a system message = post-booking phase
+        if isinstance(msg, SystemMessage) and "bookingid" in content_lower:
+            has_booking_id = True
+        
+        # Flight results returned = we've already searched
+        if '"type": "flight_results"' in content:
+            has_flight_results = True
+    
+    # Determine phase based on signals
+    if has_booking_id:
+        return "post_booking"
+    if has_flight_results:
+        return "searching"
+    
+    return "gathering"
 
-### Phase 3: After booking created (system message with BookingID + FlightID)
-1. Immediately call `check_ancillaries` with the exact BookingID and FlightID.
+
+# ─────────────────────────────────────────────
+# SYSTEM PROMPTS — phase-specific, compressed
+# ─────────────────────────────────────────────
+
+_TODAY = datetime.today().strftime("%A, %B %d, %Y")
+
+_PROMPT_PREAMBLE = f"""You are Aria, a warm and natural flight booking assistant. Conversational, clear, friendly. No bullet lists unless necessary. Never robotic.
+Today: {_TODAY}
+CRITICAL: Be warm and brief. Ask ONE clarifying question at a time. Never make up airport codes."""
+
+PHASE_PROMPTS = {
+    "gathering": _PROMPT_PREAMBLE + """
+
+Your job now: collect flight details — departure city, arrival city, travel date, passengers (adults/children/infants), one-way or round trip.
+- If user says a city, call `search_destinations` to validate it and get the airport code.
+- If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
+- Never assume adults=1 unless they explicitly said "just me" / "solo" / "1 adult".
+- If round trip, also ask for return date.
+- Once you have ALL details, confirm them with the user before proceeding.""",
+
+    "searching": _PROMPT_PREAMBLE + """
+
+You have all flight details. Call `check_flight_availability` to fetch flights.
+- If a city needs re-validation, use `search_destinations`.
+- IMPORTANT: Flight results render as interactive cards in the UI — do NOT list or describe flights in text.
+- After calling the tool, say ONLY something brief like: "Here you go! Pick a flight and fare class from the cards."
+- Do NOT ask for passenger details yet — wait for a BookingID.""",
+
+    "post_booking": _PROMPT_PREAMBLE + """
+
+A booking has been created. Follow this EXACT order:
+1. Immediately call `check_ancillaries` with the BookingID and FlightID from the system message.
 2. If extras are available, casually mention 1-2 highlights: "Want to add checked baggage or a meal?"
-3. Once extras are sorted (or skipped), ask for passenger details in ONE natural message:
-   "Almost there! Just need a few details — full name, date of birth, phone number, and email?"
+3. Use `add_ancillary` if the user wants an extra.
+4. Once extras are sorted (or skipped), ask for passenger details in ONE message:
+   "Almost there! Just need your full name, date of birth, phone number, and email."
+5. Once the user gives ALL details (firstname, lastname, birthdate, phone, email), call `confirm_booking`.
+6. Only announce success AFTER the tool returns a successful response.
 
-### Phase 4: Confirm booking
-Once you have firstname, lastname, birthdate, phone, and email — call `confirm_booking`.
-Only announce success AFTER the tool returns a successful response.
-
-## CRITICAL RULES
-- NEVER ask for passenger details before you see a BookingID system message.
-- NEVER call confirm_booking with missing or placeholder data.
-- NEVER make up airport codes — always use search_destinations first.
-- If something is unclear, ask ONE focused clarifying question.
-- Be warm, brief, human. No formal language.
-"""
+⚠️ CRITICAL: NEVER call `confirm_booking` with made-up or placeholder data like "John Doe".
+You MUST ask the user for their real name, birthdate, phone, and email BEFORE calling confirm_booking.
+If ANY detail is missing, ask for it — do NOT guess or fill in defaults.""",
+}
 
 
 # ─────────────────────────────────────────────
 # NODES
 # ─────────────────────────────────────────────
 
+
 def conversation_node(state: FlightState) -> FlightState:
-    """Main LLM node — decides what to say or which tool to call."""
+    """Main LLM node — detects phase, binds only relevant tools, picks model."""
 
     def trim_message(m):
-        """Trim heavy messages to save tokens — but NEVER break tool_calls pairing.
-        
-        OpenAI requires every ToolMessage to follow an AIMessage that has tool_calls.
-        We must never strip/replace the AIMessage tool_calls or remove ToolMessages,
-        as that causes a 400 BadRequestError. Instead, just slim the data payload.
-        """
+        """Trim heavy ToolMessage payloads to save tokens. Never removes messages."""
         try:
             if isinstance(m, ToolMessage):
                 content = m.content if isinstance(m.content, str) else json.dumps(m.content)
                 if '"type": "flight_results"' in content:
                     try:
                         data = json.loads(content)
-                        flights = data.get("data", [])
                         data["data"] = [{
                             "flight_code": f.get("flight_code"),
                             "direction": f.get("direction"),
                             "departure_time": f.get("departure_time"),
                             "arrival_time": f.get("arrival_time"),
                             "price": f.get("price"),
-                        } for f in flights[:4]]
+                        } for f in data.get("data", [])[:4]]
                         data["_trimmed"] = True
                         return ToolMessage(content=json.dumps(data), tool_call_id=m.tool_call_id)
                     except Exception:
@@ -558,7 +598,7 @@ def conversation_node(state: FlightState) -> FlightState:
                                 {"itemid": i.get("itemid"), "name": i.get("name"),
                                  "price": i.get("price"), "category": i.get("category")}
                                 for i in data.get("items", [])[:6]
-                            ]
+                            ],
                         }
                         return ToolMessage(content=json.dumps(slim), tool_call_id=m.tool_call_id)
                     except Exception:
@@ -567,20 +607,13 @@ def conversation_node(state: FlightState) -> FlightState:
             pass
         return m
 
-    # Build a safe message window for OpenAI.
-    # OpenAI enforces two rules:
-    #   1. Every ToolMessage must follow an AIMessage that contains its tool_call_id
-    #   2. Every AIMessage with tool_calls must be followed by ToolMessages for ALL its call IDs
-    # Violating either causes a 400. The safest approach: take recent messages,
-    # then drop any incomplete tool_call groups from either end.
+    # ── Build a safe message window ──
+    # OpenAI requires every ToolMessage to follow its AIMessage with tool_calls,
+    # and every AIMessage with tool_calls must have ALL its ToolMessage responses.
 
     all_msgs = list(state["messages"])
-
-    # Step 1: trim each message payload (does NOT remove any messages)
     trimmed = [trim_message(m) for m in all_msgs]
 
-    # Step 2: find tool_call groups — an AIMessage with tool_calls + its ToolMessage responses
-    # Walk the full history and mark indices that form complete groups
     def is_complete_window(msgs):
         """Return True if msgs has no broken tool_call groups."""
         pending_ids = set()
@@ -595,27 +628,32 @@ def conversation_node(state: FlightState) -> FlightState:
                 pending_ids.discard(m.tool_call_id)
         return len(pending_ids) == 0
 
-    # Step 3: start from the last 30 messages, then advance start until window is valid
-    window = trimmed[-30:]
+    window = trimmed[-MAX_CONTEXT_MESSAGES:]
 
     # Advance start past any incomplete leading tool group
     for start in range(len(window)):
         candidate = window[start:]
-        # Skip if first message is a ToolMessage (orphaned)
         if isinstance(candidate[0], ToolMessage):
             continue
-        # Skip if first message is an AIMessage with tool_calls (response will be cut off)
         if isinstance(candidate[0], AIMessage) and getattr(candidate[0], "tool_calls", []):
             continue
-        # Check the whole candidate is clean
         if is_complete_window(candidate):
             window = candidate
             break
     else:
-        # Fallback: just use the last 6 messages — enough for immediate context
         window = trimmed[-6:]
 
-    response = llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT)] + window)
+    # ── Phase-aware tool binding & model selection ──
+    phase = detect_phase(all_msgs)
+    phase_tools = PHASE_TOOLS.get(phase, ALL_TOOLS)
+    phase_model = PHASE_MODEL.get(phase, llm_full)
+    phase_prompt = PHASE_PROMPTS.get(phase, PHASE_PROMPTS["gathering"])
+
+    llm_with_phase_tools = phase_model.bind_tools(phase_tools)
+
+    print(f"[PHASE] {phase} | tools={[t.name for t in phase_tools]} | model={phase_model.model_name}")
+
+    response = llm_with_phase_tools.invoke([SystemMessage(content=phase_prompt)] + window)
     return {"messages": [response]}
 
 
@@ -627,7 +665,7 @@ def create_graph():
     workflow = StateGraph(FlightState)
 
     workflow.add_node("conversation", conversation_node)
-    workflow.add_node("tools", ToolNode(tools))
+    workflow.add_node("tools", ToolNode(ALL_TOOLS))  # ToolNode keeps ALL tools to execute any call
 
     workflow.set_entry_point("conversation")
 

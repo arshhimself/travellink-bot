@@ -177,6 +177,14 @@ def check_flight_availability(
     if not dep_date or dep_date == "PAST_DATE":
         return {"error": "Departure date is invalid or in the past. Please provide a future date."}
 
+    # Validate return date for round trips
+    if round_trip and return_date:
+        ret_date = normalize_date(return_date)
+        if not ret_date or ret_date == "PAST_DATE":
+            return {"error": "Return date is invalid or in the past. Please provide a future date."}
+        if ret_date < dep_date:
+            return {"error": f"Return date ({ret_date}) cannot be before departure date ({dep_date}). Please pick a return date on or after {dep_date}."}
+
     end_date = (datetime.strptime(dep_date, "%Y/%m/%d") + timedelta(days=7)).strftime("%Y/%m/%d")
 
     # Availability check
@@ -528,7 +536,7 @@ Your job now: collect flight details — departure city, arrival city, travel da
 - If user says a city, call `search_destinations` to validate it and get the airport code.
 - If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
 - Never assume adults=1 unless they explicitly said "just me" / "solo" / "1 adult".
-- If round trip, also ask for return date.
+- If round trip, also ask for return date. The return date MUST be on or after the departure date — if the user gives a return date before the outbound date, politely tell them and ask for a valid return date.
 - Once you have ALL details, confirm them with the user before proceeding.""",
 
     "searching": _PROMPT_PREAMBLE + """

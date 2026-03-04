@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
 
 from bot import create_graph
@@ -53,7 +53,26 @@ class BookingRequest(BaseModel):
     adults: int = 1
     child: int = 0
     infant: int = 0
+    return_flight_id: Optional[int] = None
+    return_fare_id: Optional[int] = None
     thread_id: Optional[str] = "default_thread"  # To notify the chat bot
+
+class AncillaryRequest(BaseModel):
+    booking_id: int
+    flight_id: int
+    item_id: int
+    pax_num: int = 0
+
+class PassengerDetail(BaseModel):
+    firstname: str
+    lastname: str
+    birthdate: str   # YYYY/MM/DD
+    phone: str
+    email: str
+
+class ConfirmBookingRequest(BaseModel):
+    booking_id: int
+    passengers: List[PassengerDetail]
 
 
 # ─────────────────────────────────────────────
@@ -221,7 +240,26 @@ def book_flight(request: BookingRequest):
     the bot's conversation thread so the bot knows to check ancillaries
     and collect passenger details.
     """
-    print(f"\n[BOOKING REQUEST] Flight: {request.flight_id} | Fare: {request.fare_id}")
+    print(f"\n[BOOKING REQUEST] Flight: {request.flight_id} | Fare: {request.fare_id}" +
+          (f" | Return Flight: {request.return_flight_id} | Return Fare: {request.return_fare_id}" if request.return_flight_id else ""))
+
+    bookflight_list = [
+        {
+            "fromcode": request.from_code,
+            "tocode": request.to_code,
+            "flightid": request.flight_id,
+            "fareid": request.fare_id
+        }
+    ]
+
+    # For round-trip, add the return flight as a second entry
+    if request.trip_type == "RT" and request.return_flight_id and request.return_fare_id:
+        bookflight_list.append({
+            "fromcode": request.to_code,
+            "tocode": request.from_code,
+            "flightid": request.return_flight_id,
+            "fareid": request.return_fare_id
+        })
 
     payload = {
         "aerocrs": {
@@ -230,14 +268,7 @@ def book_flight(request: BookingRequest):
                 "adults": request.adults,
                 "child": request.child,
                 "infant": request.infant,
-                "bookflight": [
-                    {
-                        "fromcode": request.from_code,
-                        "tocode": request.to_code,
-                        "flightid": request.flight_id,
-                        "fareid": request.fare_id
-                    }
-                ]
+                "bookflight": bookflight_list
             }
         }
     }
@@ -285,6 +316,113 @@ def book_flight(request: BookingRequest):
         raise
     except Exception as e:
         print(f"[BOOKING ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/add-ancillary")
+def add_ancillary_endpoint(request: AncillaryRequest):
+    """
+    Add an ancillary extra (baggage, meal, etc.) to a booking.
+    Called directly by the frontend — no chat message needed.
+    """
+    print(f"\n[ANCILLARY ADD] Booking: {request.booking_id} | Flight: {request.flight_id} | Item: {request.item_id} | Pax: {request.pax_num}")
+
+    payload = {
+        "aerocrs": {
+            "parms": {
+                "ancillaries": {
+                    "ancillary": [{
+                        "paxnum": request.pax_num,
+                        "itemid": request.item_id,
+                        "bookingid": request.booking_id,
+                        "flightid": request.flight_id
+                    }]
+                }
+            }
+        }
+    }
+
+    try:
+        r = requests.post(f"{BASE_URL}/createAncillary", headers=_get_headers(), json=payload)
+        result = r.json()
+        print(f"[ANCILLARY RESPONSE] {result}")
+
+        success = result.get("aerocrs", {}).get("success", False)
+        if not success:
+            detail = result.get("aerocrs", {}).get("details", "Unknown error")
+            raise HTTPException(status_code=400, detail=str(detail))
+
+        return {"success": True, "details": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ANCILLARY ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/confirm-booking")
+def confirm_booking_endpoint(request: ConfirmBookingRequest):
+    """
+    Finalize a booking with passenger details for ALL passengers.
+    Called by the frontend passenger form.
+    """
+    print(f"\n[CONFIRM BOOKING] BookingID: {request.booking_id} | Passengers: {len(request.passengers)}")
+
+    passenger_list = []
+    for pax in request.passengers:
+        # Normalize birthdate
+        from bot import normalize_date
+        bd = normalize_date(pax.birthdate, allow_past=True) or pax.birthdate
+        passenger_list.append({
+            "paxtitle": "Mr.",
+            "firstname": pax.firstname,
+            "lastname": pax.lastname,
+            "paxage": None,
+            "paxnationailty": "US",
+            "paxdoctype": "PP",
+            "paxdocnumber": "9919239123",
+            "paxdocissuer": "US",
+            "paxdocexpiry": "2028/12/31",
+            "paxbirthdate": bd,
+            "paxphone": str(pax.phone),
+            "paxemail": pax.email,
+        })
+
+    payload = {
+        "aerocrs": {
+            "parms": {
+                "bookingid": request.booking_id,
+                "agentconfirmation": "apiconnector",
+                "confirmationemail": request.passengers[0].email,
+                "passenger": passenger_list
+            }
+        }
+    }
+
+    try:
+        r = requests.post(f"{BASE_URL}/confirmBooking", headers=_get_headers(), json=payload)
+        result = r.json()
+        print(f"[CONFIRM RESPONSE] {result}")
+
+        success = result.get("aerocrs", {}).get("success", False)
+        if not success:
+            detail = result.get("aerocrs", {}).get("details", result)
+            # Check for string detail or list
+            if isinstance(detail, dict):
+                detail_msg = detail.get("detail", str(detail))
+            elif isinstance(detail, list):
+                detail_msg = ", ".join(str(d) for d in detail)
+            else:
+                detail_msg = str(detail)
+            raise HTTPException(status_code=400, detail=detail_msg)
+
+        return {"success": True, "details": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[CONFIRM ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

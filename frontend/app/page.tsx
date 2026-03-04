@@ -168,18 +168,18 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 
 // ─── Flight Card ──────────────────────────────────────────────────────────────
 
-function FlightCard({ flight, context, onClick }: {
-  flight: Flight; context: BookingContext; onClick: () => void;
+function FlightCard({ flight, context, onClick, disabled }: {
+  flight: Flight; context: BookingContext; onClick: () => void; disabled?: boolean;
 }) {
   const depTime = getDepTime(flight).slice(-5) || "--:--";
   const arrTime = getArrTime(flight).slice(-5) || "--:--";
 
   return (
     <motion.div
-      whileHover={{ scale: 1.01, y: -2 }}
-      whileTap={{ scale: 0.99 }}
-      onClick={onClick}
-      className="group relative cursor-pointer overflow-hidden"
+      whileHover={disabled ? {} : { scale: 1.01, y: -2 }}
+      whileTap={disabled ? {} : { scale: 0.99 }}
+      onClick={disabled ? undefined : onClick}
+      className={cn("group relative overflow-hidden", disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer")}
     >
       {/* Red left accent bar */}
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-600 group-hover:w-1.5 transition-all duration-200 rounded-l" />
@@ -351,11 +351,13 @@ function getCategoryIcon(category: string): LucideIcon {
   return CATEGORY_ICON_MAP.default;
 }
 
-function AncillaryCard({ item, bookingId, flightId, onAdded }: {
+function AncillaryCard({ item, bookingId, flightId, paxNum, onAdded, onError }: {
   item: AncillaryItem;
   bookingId?: number;
   flightId?: number;
+  paxNum: number;
   onAdded: (item: AncillaryItem) => void;
+  onError: (msg: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
@@ -364,14 +366,16 @@ function AncillaryCard({ item, bookingId, flightId, onAdded }: {
     if (adding || added) return;
     setAdding(true);
     try {
-      await axios.post("http://127.0.0.1:8000/chat", {
-        message: `__booking__: User wants to add ancillary item "${item.name}" (itemid: ${item.itemid}) to BookingID ${bookingId}, FlightID ${flightId}. Call add_ancillary with booking_id=${bookingId}, flight_id=${flightId}, item_id=${item.itemid}.`,
-        thread_id: "user-session-1",
+      await axios.post("http://127.0.0.1:8000/add-ancillary", {
+        booking_id: bookingId,
+        flight_id: flightId,
+        item_id: Number(item.itemid),
+        pax_num: paxNum,
       });
       setAdded(true);
       onAdded(item);
-    } catch {
-      // silently fail — user can type if needed
+    } catch (err: any) {
+      onError(err?.response?.data?.detail || err?.message || "Failed to add extra");
     } finally {
       setAdding(false);
     }
@@ -464,11 +468,13 @@ function isWeightGroup(category: string, items: AncillaryItem[]): boolean {
   return items.filter((i) => kgPattern.test(i.name)).length > items.length / 2;
 }
 
-function WeightStepper({ items, bookingId, flightId, onAdded }: {
+function WeightStepper({ items, bookingId, flightId, paxNum, onAdded, onError }: {
   items: AncillaryItem[];
   bookingId?: number;
   flightId?: number;
+  paxNum: number;
   onAdded: (item: AncillaryItem) => void;
+  onError: (msg: string) => void;
 }) {
   const getKg = (name: string, desc = "") => {
     const m = (name + " " + desc).match(/(\d+)\s*kg/i);
@@ -493,14 +499,16 @@ function WeightStepper({ items, bookingId, flightId, onAdded }: {
     if (!selectedItem || adding || added) return;
     setAdding(true);
     try {
-      await axios.post("http://127.0.0.1:8000/chat", {
-        message: `__booking__: User wants to add ancillary item "${selectedItem.name}" (itemid: ${selectedItem.itemid}) to BookingID ${bookingId}, FlightID ${flightId}. Call add_ancillary with booking_id=${bookingId}, flight_id=${flightId}, item_id=${selectedItem.itemid}.`,
-        thread_id: "user-session-1",
+      await axios.post("http://127.0.0.1:8000/add-ancillary", {
+        booking_id: bookingId,
+        flight_id: flightId,
+        item_id: Number(selectedItem.itemid),
+        pax_num: paxNum,
       });
       setAdded(true);
       onAdded(selectedItem);
-    } catch {
-      // silently fail
+    } catch (err: any) {
+      onError(err?.response?.data?.detail || err?.message || "Failed to add baggage");
     } finally {
       setAdding(false);
     }
@@ -602,10 +610,15 @@ function WeightStepper({ items, bookingId, flightId, onAdded }: {
   );
 }
 
-function AncillaryResults({ data, onItemAdded }: {
+function AncillaryResults({ data, paxCount, onItemAdded, onError, onContinue }: {
   data: AncillaryResponse;
+  paxCount: number;
   onItemAdded: (item: AncillaryItem) => void;
+  onError: (msg: string) => void;
+  onContinue: () => void;
 }) {
+  const [activePax, setActivePax] = useState(0);
+
   if (!data.available || !data.items?.length) return null;
 
   // Group by category
@@ -615,6 +628,8 @@ function AncillaryResults({ data, onItemAdded }: {
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push(item);
   }
+
+  const totalPax = Math.max(paxCount, 1);
 
   return (
     <div className="p-4 space-y-4">
@@ -627,45 +642,361 @@ function AncillaryResults({ data, onItemAdded }: {
         <Luggage className="w-5 h-5 text-white/60" />
       </div>
 
+      {/* Passenger tabs — only if more than 1 passenger */}
+      {totalPax > 1 && (
+        <div className="flex gap-1.5 bg-zinc-200 rounded-xl p-1">
+          {Array.from({ length: totalPax }, (_, i) => (
+            <button
+              key={i}
+              onClick={() => setActivePax(i)}
+              className={cn(
+                "flex-1 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all",
+                activePax === i
+                  ? "bg-red-600 text-white shadow-md"
+                  : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100"
+              )}
+            >
+              Passenger {i + 1}
+            </button>
+          ))}
+        </div>
+      )}
+
       {Object.entries(grouped).map(([category, items]) => (
-        <div key={category} className="space-y-2">
+        <div key={`${category}-${activePax}`} className="space-y-2">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 px-1">{category}</p>
           {isWeightGroup(category, items) ? (
             <WeightStepper
+              key={`weight-${activePax}`}
               items={items}
               bookingId={data.booking_id}
               flightId={data.flight_id}
+              paxNum={activePax}
               onAdded={onItemAdded}
+              onError={onError}
             />
           ) : (
             items.map((item) => (
               <AncillaryCard
-                key={item.itemid}
+                key={`${item.itemid}-${activePax}`}
                 item={item}
                 bookingId={data.booking_id}
                 flightId={data.flight_id}
+                paxNum={activePax}
                 onAdded={onItemAdded}
+                onError={onError}
               />
             ))
           )}
         </div>
       ))}
 
-      <p className="text-center text-[10px] text-zinc-400 font-bold uppercase tracking-widest pt-1">
-        Skip any extras — just say "no thanks" or continue
-      </p>
+      {/* Continue button */}
+      <button
+        onClick={onContinue}
+        className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-black text-sm uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-md"
+      >
+        Continue
+        <ChevronRight className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+// ─── Passenger Form ───────────────────────────────────────────────────────────
+
+interface PassengerFormData {
+  firstname: string;
+  lastname: string;
+  birthdate: string;
+  phone: string;
+  email: string;
+}
+
+function PassengerForm({ paxCount, bookingId, fromCode, toCode, onSuccess, onError }: {
+  paxCount: number;
+  bookingId: number;
+  fromCode: string;
+  toCode: string;
+  onSuccess: (pnr: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const totalPax = Math.max(paxCount, 1);
+  const [activePax, setActivePax] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [confirmData, setConfirmData] = useState<any>(null);
+  const [passengers, setPassengers] = useState<PassengerFormData[]>(
+    Array.from({ length: totalPax }, () => ({
+      firstname: "", lastname: "", birthdate: "", phone: "", email: "",
+    }))
+  );
+
+  const updateField = (idx: number, field: keyof PassengerFormData, value: string) => {
+    setPassengers((prev) => {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], [field]: value };
+      return updated;
+    });
+  };
+
+  const isComplete = passengers.every(
+    (p) => p.firstname.trim() && p.lastname.trim() && p.birthdate.trim() && p.phone.trim() && p.email.trim()
+  );
+
+  const handleSubmit = async () => {
+    if (!isComplete || submitting || submitted) return;
+    setSubmitting(true);
+    try {
+      const res = await axios.post("http://127.0.0.1:8000/confirm-booking", {
+        booking_id: bookingId,
+        passengers: passengers.map((p) => ({
+          firstname: p.firstname.trim(),
+          lastname: p.lastname.trim(),
+          birthdate: p.birthdate.trim(),
+          phone: p.phone.trim(),
+          email: p.email.trim(),
+        })),
+      });
+      setSubmitted(true);
+      const booking = res.data?.details?.aerocrs || {};
+      setConfirmData(booking);
+      const pnr = booking.pnrref || "Confirmed";
+      onSuccess(pnr);
+    } catch (err: any) {
+      onError(err?.response?.data?.detail || err?.message || "Confirmation failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const pax = passengers[activePax];
+
+  const inputCls = "w-full bg-zinc-100 border-2 border-zinc-200 focus:border-red-600 outline-none rounded-xl px-3 py-2.5 text-sm text-zinc-900 font-medium placeholder:text-zinc-400 transition-colors";
+  const labelCls = "text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-1 block";
+
+  if (submitted && confirmData) {
+    const pnr = confirmData.pnrref || "N/A";
+    const total = confirmData.topay || "0.00";
+    const currency = confirmData.currency || "USD";
+    const link = confirmData.linktobooking;
+    const paxList = confirmData.passenger || [];
+    const status = confirmData.status || "OK";
+    const ticketDeadline = confirmData.pnrttl;
+
+    return (
+      <div className="-mx-4 px-2 py-4">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-white rounded-2xl shadow-xl overflow-hidden border border-zinc-200 max-w-[640px] mx-auto"
+        >
+          {/* Top strip */}
+          <div className="bg-red-600 px-6 py-2 flex items-center justify-between">
+            <span className="text-white/70 text-[10px] font-black uppercase tracking-[0.25em]">Boarding Pass</span>
+            <span className={cn(
+              "text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full",
+              status === "OK" ? "bg-white/20 text-white" : "bg-yellow-500/20 text-yellow-200"
+            )}>{status === "OK" ? "✓ Confirmed" : status}</span>
+          </div>
+
+          {/* Main body — horizontal layout */}
+          <div className="flex">
+            {/* Left: Route section */}
+            <div className="flex-1 px-6 py-5">
+              <div className="flex items-center gap-5 mb-5">
+                <div className="text-center">
+                  <div className="text-4xl font-black text-zinc-900 tracking-tight leading-none">{fromCode}</div>
+                  <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-1">Origin</div>
+                </div>
+                <div className="flex-1 flex items-center gap-2">
+                  <div className="flex-1 h-[2px] bg-gradient-to-r from-red-600 to-red-300 rounded-full" />
+                  <div className="bg-red-600 p-2 rounded-full shadow-md shadow-red-200">
+                    <Plane className="w-4 h-4 text-white rotate-90" />
+                  </div>
+                  <div className="flex-1 h-[2px] bg-gradient-to-r from-red-300 to-red-600 rounded-full" />
+                </div>
+                <div className="text-center">
+                  <div className="text-4xl font-black text-zinc-900 tracking-tight leading-none">{toCode}</div>
+                  <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-1">Destination</div>
+                </div>
+              </div>
+
+              {/* Info grid */}
+              <div className="grid grid-cols-3 gap-x-4 gap-y-3">
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400">PNR</div>
+                  <div className="text-lg font-black text-zinc-900 tracking-wider">{pnr}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Booking</div>
+                  <div className="text-lg font-black text-zinc-900 tracking-wider">{bookingId}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Total</div>
+                  <div className="text-lg font-black text-red-600">{currency} {total}</div>
+                </div>
+              </div>
+
+              {/* Passengers */}
+              <div className="mt-4">
+                <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mb-1.5">Passengers</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {(paxList.length > 0 ? paxList : passengers).map((p: any, i: number) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <div className="w-5 h-5 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[9px] font-black text-red-600">{i + 1}</span>
+                      </div>
+                      <span className="text-xs font-bold text-zinc-700 uppercase tracking-wide">
+                        {p.paxtitle || ""} {p.firstname} {p.lastname}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Tear-off stub */}
+            <div className="relative w-[140px] flex-shrink-0">
+              {/* Dashed vertical separator with cutout circles */}
+              <div className="absolute left-0 top-0 bottom-0 w-0">
+                <div className="absolute -left-3 -top-1 w-6 h-6 bg-zinc-100 rounded-full" />
+                <div className="absolute -left-3 -bottom-1 w-6 h-6 bg-zinc-100 rounded-full" />
+                <div className="absolute left-0 top-4 bottom-4 border-l-2 border-dashed border-zinc-200" />
+              </div>
+
+              <div className="h-full flex flex-col items-center justify-center px-4 py-5 gap-3 bg-zinc-50">
+                <div className="text-center">
+                  <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400">PNR</div>
+                  <div className="text-xl font-black text-zinc-900 tracking-widest">{pnr}</div>
+                </div>
+                {ticketDeadline && (
+                  <div className="text-center">
+                    <div className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Ticket By</div>
+                    <div className="text-[11px] font-bold text-zinc-600 mt-0.5">{ticketDeadline}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom — View Booking link */}
+          {link && (
+            <div className="px-6 pb-4">
+              <a
+                href={link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-black text-sm uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-md"
+              >
+                View Booking <ChevronRight className="w-4 h-4" />
+              </a>
+            </div>
+          )}
+        </motion.div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      {/* Header */}
+      <div className="bg-red-600 rounded-xl px-4 py-3 flex items-center justify-between">
+        <div>
+          <div className="text-white font-black text-base uppercase tracking-wide">Passenger Details</div>
+          <div className="text-red-200 text-xs mt-0.5 font-bold">{totalPax} passenger{totalPax !== 1 ? "s" : ""} · Booking #{bookingId}</div>
+        </div>
+        <User className="w-5 h-5 text-white/60" />
+      </div>
+
+      {/* Passenger tabs */}
+      {totalPax > 1 && (
+        <div className="flex gap-1.5 bg-zinc-200 rounded-xl p-1">
+          {Array.from({ length: totalPax }, (_, i) => {
+            const filled = passengers[i].firstname.trim() && passengers[i].lastname.trim();
+            return (
+              <button
+                key={i}
+                onClick={() => setActivePax(i)}
+                className={cn(
+                  "flex-1 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5",
+                  activePax === i
+                    ? "bg-red-600 text-white shadow-md"
+                    : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100"
+                )}
+              >
+                {filled && <Check className="w-3 h-3" />}
+                Passenger {i + 1}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Form fields */}
+      <div className="bg-white border border-zinc-200 rounded-2xl p-4 space-y-3 shadow-sm">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>First Name</label>
+            <input className={inputCls} placeholder="John" value={pax.firstname}
+              onChange={(e) => updateField(activePax, "firstname", e.target.value)} />
+          </div>
+          <div>
+            <label className={labelCls}>Last Name</label>
+            <input className={inputCls} placeholder="Doe" value={pax.lastname}
+              onChange={(e) => updateField(activePax, "lastname", e.target.value)} />
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Date of Birth</label>
+          <input type="date" className={inputCls} value={pax.birthdate}
+            onChange={(e) => updateField(activePax, "birthdate", e.target.value)} />
+        </div>
+        <div>
+          <label className={labelCls}>Phone Number</label>
+          <input type="tel" className={inputCls} placeholder="+1 234 567 8900" value={pax.phone}
+            onChange={(e) => updateField(activePax, "phone", e.target.value)} />
+        </div>
+        <div>
+          <label className={labelCls}>Email</label>
+          <input type="email" className={inputCls} placeholder="john@example.com" value={pax.email}
+            onChange={(e) => updateField(activePax, "email", e.target.value)} />
+        </div>
+      </div>
+
+      {/* Submit */}
+      <button
+        onClick={handleSubmit}
+        disabled={!isComplete || submitting}
+        className={cn(
+          "w-full py-3 rounded-xl font-black text-sm uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-md",
+          isComplete && !submitting
+            ? "bg-red-600 hover:bg-red-700 text-white"
+            : "bg-zinc-200 text-zinc-400 cursor-not-allowed"
+        )}
+      >
+        {submitting ? (
+          <><Loader2 className="w-4 h-4 animate-spin" /> Confirming...</>
+        ) : (
+          <><Check className="w-4 h-4" /> Confirm Booking</>
+        )}
+      </button>
     </div>
   );
 }
 
 // ─── Flight Results ───────────────────────────────────────────────────────────
 
-function FlightResults({ data, onFlightClick }: {
+function FlightResults({ data, outboundSelected, onFlightClick }: {
   data: FlightResponse;
+  outboundSelected: boolean;
   onFlightClick: (flight: Flight, ctx: BookingContext) => void;
 }) {
   const outbound = data.data.filter((f) => f.direction === "Outbound");
   const inbound = data.data.filter((f) => f.direction === "Return");
+  const isRT = data.context.triptype === "RT";
+  // Disable return cards if RT and outbound not yet selected
+  const returnDisabled = isRT && !outboundSelected;
 
   return (
     <div className="p-4 space-y-4">
@@ -688,9 +1019,12 @@ function FlightResults({ data, onFlightClick }: {
 
       {inbound.length > 0 && (
         <div className="space-y-2.5">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-600 px-1">Return Flights</p>
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-600 px-1">
+            Return Flights
+            {returnDisabled && <span className="text-zinc-400 ml-2 normal-case tracking-normal font-bold">— select an outbound flight first</span>}
+          </p>
           {inbound.map((f, i) => (
-            <FlightCard key={i} flight={f} context={data.context} onClick={() => onFlightClick(f, data.context)} />
+            <FlightCard key={i} flight={f} context={data.context} disabled={returnDisabled} onClick={() => onFlightClick(f, data.context)} />
           ))}
         </div>
       )}
@@ -707,7 +1041,7 @@ export default function Home() {
     {
       id: "welcome",
       role: "assistant",
-      content: "Hello! I'm Aria, your personal flight assistant. Where are you flying to today?",
+      content: "Hello! I'm your personal flight assistant. Where are you flying to today?",
       timestamp: new Date(),
     },
   ]);
@@ -718,6 +1052,11 @@ export default function Home() {
   const [selectedFareId, setSelectedFareId] = useState<number | null>(null);
   const [submittingFare, setSubmittingFare] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // RT two-step: store outbound selection until return flight is picked
+  const [outboundSelection, setOutboundSelection] = useState<{ flight: Flight; cls: FlightClass } | null>(null);
+  // Passenger form state
+  const [activeBookingId, setActiveBookingId] = useState<number | null>(null);
+  const [showPassengerForm, setShowPassengerForm] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -768,25 +1107,54 @@ export default function Home() {
 
   const handleClassSelect = async (cls: FlightClass) => {
     if (!selectedFlight || !flightContext || submittingFare) return;
+
+    const isRT = flightContext.triptype === "RT";
+
+    // RT step 1: user picked outbound → save it and ask for return
+    if (isRT && !outboundSelection && selectedFlight.direction === "Outbound") {
+      setOutboundSelection({ flight: selectedFlight, cls });
+      setSelectedFlight(null);
+      setSelectedFareId(null);
+      addToast("success", "Outbound Selected!", "Now pick your return flight.");
+      return;
+    }
+
     setSubmittingFare(true);
     setSelectedFareId(cls.fareid);
+
+    // Build booking payload — include return flight info for RT
+    const bookingPayload: Record<string, unknown> = {
+      flight_id: isRT && outboundSelection ? outboundSelection.cls.flightid : cls.flightid,
+      fare_id: isRT && outboundSelection ? outboundSelection.cls.fareid : cls.fareid,
+      from_code: flightContext.from_code,
+      to_code: flightContext.to_code,
+      trip_type: flightContext.triptype || "OW",
+      adults: flightContext.adults,
+      child: flightContext.child,
+      infant: flightContext.infant,
+      thread_id: THREAD_ID,
+    };
+
+    if (isRT && outboundSelection) {
+      bookingPayload.return_flight_id = cls.flightid;
+      bookingPayload.return_fare_id = cls.fareid;
+    }
+
     try {
-      const res = await axios.post("http://127.0.0.1:8000/book-flight", {
-        flight_id: cls.flightid, fare_id: cls.fareid,
-        from_code: flightContext.from_code, to_code: flightContext.to_code,
-        trip_type: flightContext.triptype || "OW",
-        adults: flightContext.adults, child: flightContext.child,
-        infant: flightContext.infant, thread_id: THREAD_ID,
-      });
+      const res = await axios.post("http://127.0.0.1:8000/book-flight", bookingPayload);
       const meta = res.data?._meta || {};
       const bookingId = meta.booking_id;
       const pnr = meta.pnr || "N/A";
       setSelectedFlight(null);
       setSubmittingFare(false);
+      setOutboundSelection(null);
+      if (bookingId) setActiveBookingId(bookingId);
+      setShowPassengerForm(false); // Reset for new booking
       addToast("success", "Flight Booked!", `PNR: ${pnr}`);
       setIsLoading(true);
       try {
-        const trigger = `__booking__: Flight booked. PNR: ${pnr}. BookingID: ${bookingId}. FlightID: ${cls.flightid}. Immediately call check_ancillaries with BookingID ${bookingId} and FlightID ${cls.flightid}, then collect passenger details.`;
+        const primaryFlightId = isRT && outboundSelection ? outboundSelection.cls.flightid : cls.flightid;
+        const trigger = `__booking__: Flight booked. PNR: ${pnr}. BookingID: ${bookingId}. FlightID: ${primaryFlightId}. Immediately call check_ancillaries with BookingID ${bookingId} and FlightID ${primaryFlightId}, then collect passenger details.`;
         const { response, flightResults, ancillaryResults } = await sendToBot(trigger);
         setMessages((prev) => [...prev, {
           id: (Date.now() + 1).toString(), role: "assistant",
@@ -800,6 +1168,7 @@ export default function Home() {
     } catch (err: any) {
       setSubmittingFare(false);
       setSelectedFareId(null);
+      setOutboundSelection(null);
       addToast("error", "Booking Failed", err?.response?.data?.detail || err?.message || "Something went wrong");
     }
   };
@@ -815,6 +1184,7 @@ export default function Home() {
           )}
           <FlightResults
             data={msg.flightResults}
+            outboundSelected={!!outboundSelection}
             onFlightClick={(f, ctx) => { setSelectedFlight(f); setFlightContext(ctx); setSelectedFareId(null); }}
           />
         </>
@@ -822,18 +1192,40 @@ export default function Home() {
     }
     // Only render ancillary cards if available=true and there are items
     if (msg.role === "assistant" && msg.ancillaryResults?.available && msg.ancillaryResults.items?.length > 0) {
+      const paxCount = (flightContext?.adults ?? 1) + (flightContext?.child ?? 0);
       return (
         <>
           {msg.content && (
             <div className="px-4 pt-3 pb-1 text-base leading-relaxed text-zinc-700 font-medium">{msg.content}</div>
           )}
-          <AncillaryResults
-            data={msg.ancillaryResults}
-            onItemAdded={(item) => {
-              setAddedAncillaries((prev) => [...prev, String(item.itemid)]);
-              addToast("success", "Extra Added!", item.name);
-            }}
-          />
+          {!showPassengerForm && (
+            <AncillaryResults
+              data={msg.ancillaryResults}
+              paxCount={paxCount}
+              onItemAdded={(item) => {
+                setAddedAncillaries((prev) => [...prev, String(item.itemid)]);
+                addToast("success", "Extra Added!", item.name);
+              }}
+              onError={(errMsg) => addToast("error", "Add Failed", errMsg)}
+              onContinue={() => {
+                setShowPassengerForm(true);
+              }}
+            />
+          )}
+          {showPassengerForm && (msg.ancillaryResults.booking_id || activeBookingId) && (
+            <PassengerForm
+              paxCount={paxCount}
+              bookingId={msg.ancillaryResults.booking_id || activeBookingId!}
+              fromCode={flightContext?.from_code || ""}
+              toCode={flightContext?.to_code || ""}
+              onSuccess={(pnr) => {
+                addToast("success", "Booking Confirmed!", `PNR: ${pnr}`);
+              }}
+              onError={(errMsg) => {
+                addToast("error", "Confirmation Failed", errMsg);
+              }}
+            />
+          )}
         </>
       );
     }
@@ -846,6 +1238,27 @@ export default function Home() {
       {/* ── MESSAGES ── */}
       <main className="flex-1 overflow-y-auto px-4 py-4 bg-zinc-100">
         <div className="max-w-2xl mx-auto space-y-3">
+          {/* RT banner: outbound selected, waiting for return */}
+          {outboundSelection && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+              className="flex items-center gap-3 bg-red-600 text-white rounded-xl px-4 py-3 shadow-md"
+            >
+              <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+              <div className="flex-1">
+                <div className="font-black text-sm uppercase tracking-wide">Outbound Selected</div>
+                <div className="text-red-200 text-xs font-bold mt-0.5">
+                  Flight {outboundSelection.flight.flight_number || outboundSelection.flight.flight_code} · {outboundSelection.cls.className} — Now pick a return flight
+                </div>
+              </div>
+              <button
+                onClick={() => setOutboundSelection(null)}
+                className="p-1 rounded-lg bg-red-700/50 hover:bg-red-700 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          )}
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
               <motion.div
@@ -909,7 +1322,7 @@ export default function Home() {
         <div className="max-w-2xl mx-auto flex items-center gap-2">
           <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-400 font-bold uppercase tracking-wider whitespace-nowrap">
             <MapPin className="w-3 h-3 text-red-600" />
-            <span>Ask Aria</span>
+            <span>Ask me</span>
           </div>
           <div className="w-px h-4 bg-zinc-200 hidden sm:block" />
 

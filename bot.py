@@ -517,7 +517,7 @@ def detect_phase(messages: list) -> str:
 
 _TODAY = datetime.today().strftime("%A, %B %d, %Y")
 
-_PROMPT_PREAMBLE = f"""You are Aria, a warm and natural flight booking assistant. Conversational, clear, friendly. No bullet lists unless necessary. Never robotic.
+_PROMPT_PREAMBLE = f"""You are a warm and natural flight booking assistant. Conversational, clear, friendly. No bullet lists unless necessary. Never robotic.
 Today: {_TODAY}
 CRITICAL: Be warm and brief. Ask ONE clarifying question at a time. Never make up airport codes."""
 
@@ -686,15 +686,15 @@ def create_graph():
 def main():
     graph = create_graph()
     thread_id = "flight-thread-1"
-    print("Aria (Flight Assistant) ready. Type 'quit' to exit.\n")
-    print("Aria: Hey! I'm Aria, your flight assistant. Where are you thinking of flying to?\n")
+    print("Flight Assistant ready. Type 'quit' to exit.\n")
+    print("Assistant: Hey! I'm your flight assistant. Where are you thinking of flying to?\n")
 
     while True:
         user_input = input("You: ").strip()
         if not user_input:
             continue
         if user_input.lower() in ["quit", "exit"]:
-            print("Aria: Safe travels! 👋")
+            print("Assistant: Safe travels! 👋")
             break
 
         result = graph.invoke(
@@ -709,7 +709,7 @@ def main():
         if isinstance(content, str) and '"type": "flight_results"' in content:
             try:
                 data = json.loads(content)
-                print(f"\nAria: {data.get('header', '')} | {data.get('sub_header', '')}")
+                print(f"\nAssistant: {data.get('header', '')} | {data.get('sub_header', '')}")
                 for f in data.get("data", []):
                     print(f"  [{f['direction']}] Flight {f['flight_code']} | "
                           f"{f['departure_time']} → {f['arrival_time']} | "
@@ -720,7 +720,7 @@ def main():
                 pass
 
         if content:
-            print(f"Aria: {content}\n")
+            print(f"Assistant: {content}\n")
 
 
 if __name__ == "__main__":

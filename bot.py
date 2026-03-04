@@ -456,17 +456,17 @@ def confirm_booking(
         return {"error": str(e)}
 
 
-# All tools — ToolNode needs the full set so it can execute any tool the LLM picks
+
 ALL_TOOLS = [search_destinations, check_flight_availability, check_ancillaries, add_ancillary, confirm_booking]
 
-# Phase → tool subset mapping (only these schemas are sent to the LLM)
+
 PHASE_TOOLS = {
     "gathering":    [search_destinations, check_flight_availability],
     "searching":    [search_destinations, check_flight_availability],
     "post_booking": [check_ancillaries, add_ancillary, confirm_booking],
 }
 
-# Phase → model mapping (use cheaper model for simple exchanges)
+
 PHASE_MODEL = {
     "gathering":    llm_mini,
     "searching":    llm_mini,
@@ -474,9 +474,7 @@ PHASE_MODEL = {
 }
 
 
-# ─────────────────────────────────────────────
-# PHASE DETECTION
-# ─────────────────────────────────────────────
+
 
 def detect_phase(messages: list) -> str:
     """Scan recent messages to determine conversation phase.
@@ -607,9 +605,7 @@ def conversation_node(state: FlightState) -> FlightState:
             pass
         return m
 
-    # ── Build a safe message window ──
-    # OpenAI requires every ToolMessage to follow its AIMessage with tool_calls,
-    # and every AIMessage with tool_calls must have ALL its ToolMessage responses.
+
 
     all_msgs = list(state["messages"])
     trimmed = [trim_message(m) for m in all_msgs]

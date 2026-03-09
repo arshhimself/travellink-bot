@@ -4,9 +4,9 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Send, Plane, User, Loader2, X, Check,
-  ChevronRight, AlertCircle, CheckCircle2, Info, MapPin,
+  ChevronRight, AlertCircle, CheckCircle2, Info,
   Luggage, Utensils, Shield, Dumbbell, Package, Coffee, Armchair,
-  Plus, Minus
+  Plus, Minus, Clock, ArrowRight
 } from "lucide-react";
 import axios from "axios";
 import { clsx, type ClassValue } from "clsx";
@@ -176,64 +176,66 @@ function FlightCard({ flight, context, onClick, disabled }: {
 
   return (
     <motion.div
-      whileHover={disabled ? {} : { scale: 1.01, y: -2 }}
+      whileHover={disabled ? {} : { y: -2 }}
       whileTap={disabled ? {} : { scale: 0.99 }}
       onClick={disabled ? undefined : onClick}
       className={cn("group relative overflow-hidden", disabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer")}
     >
-      {/* Red left accent bar */}
-      <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-600 group-hover:w-1.5 transition-all duration-200 rounded-l" />
-      <div className="ml-1.5 bg-white border border-zinc-200 group-hover:border-red-600/40 rounded-r-2xl p-4 transition-all shadow-sm group-hover:shadow-md">
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-red-600 rounded-l" />
+      <div className="ml-[3px] bg-white border border-zinc-150 group-hover:border-zinc-300 group-hover:shadow-md rounded-r-2xl p-4 transition-all duration-200 shadow-sm">
 
         {/* Top row */}
-        <div className="flex items-center justify-between mb-3">
-          <span className={cn(
-            "text-[11px] font-black tracking-[0.15em] uppercase px-2 py-0.5 rounded-md",
-            flight.direction === "Outbound" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"
-          )}>
-            {flight.direction}
-          </span>
+        <div className="flex items-center justify-between mb-3.5">
           <div className="flex items-center gap-2">
+            <span className={cn(
+              "text-[10px] font-semibold tracking-widest uppercase px-2 py-0.5 rounded",
+              flight.direction === "Outbound"
+                ? "bg-blue-50 text-blue-600 border border-blue-100"
+                : "bg-emerald-50 text-emerald-600 border border-emerald-100"
+            )}>
+              {flight.direction}
+            </span>
             {flight.via && (
-              <span className="text-[11px] bg-yellow-100 text-yellow-700 font-black px-2 py-0.5 rounded-md uppercase tracking-wider">
+              <span className="text-[10px] bg-amber-50 text-amber-600 border border-amber-100 font-semibold px-2 py-0.5 rounded uppercase tracking-wider">
                 Via {flight.via}
               </span>
             )}
-            <span className="text-sm font-bold text-zinc-400 font-mono">{flight.flight_number || flight.flight_code}</span>
           </div>
+          <span className="text-xs font-mono font-medium text-zinc-400">{flight.flight_number || flight.flight_code}</span>
         </div>
 
         {/* Route row */}
-        <div className="flex items-center gap-4 mb-3">
-          <div className="text-center min-w-[60px]">
-            <div className="text-3xl font-black text-zinc-900 leading-none tracking-tight">{depTime}</div>
-            <div className="text-xs font-black text-zinc-400 uppercase tracking-widest mt-1">{getOriginLabel(flight, context)}</div>
+        <div className="flex items-center gap-3 mb-3.5">
+          <div className="text-center min-w-[56px]">
+            <div className="text-2xl font-bold text-zinc-900 leading-none tabular-nums">{depTime}</div>
+            <div className="text-[11px] font-semibold text-zinc-400 uppercase tracking-widest mt-1">{getOriginLabel(flight, context)}</div>
           </div>
           <div className="flex-1 flex flex-col items-center gap-1">
-            <div className="w-full flex items-center gap-1.5">
+            <div className="w-full flex items-center gap-2">
               <div className="flex-1 h-px bg-zinc-200" />
-              <div className="bg-red-600 p-1.5 rounded-full shadow-sm shadow-red-200">
-                <Plane className="w-2.5 h-2.5 text-white rotate-90" />
-              </div>
+              <Plane className="w-3.5 h-3.5 text-red-500 rotate-90 flex-shrink-0" />
               <div className="flex-1 h-px bg-zinc-200" />
             </div>
-            <div className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold">{flight.flight_type || "Direct"}</div>
+            <div className="text-[9px] text-zinc-400 uppercase tracking-widest font-medium">{flight.flight_type || "Direct"}</div>
           </div>
-          <div className="text-center min-w-[60px]">
-            <div className="text-3xl font-black text-zinc-900 leading-none tracking-tight">{arrTime}</div>
-            <div className="text-xs font-black text-zinc-400 uppercase tracking-widest mt-1">{getDestLabel(flight, context)}</div>
+          <div className="text-center min-w-[56px]">
+            <div className="text-2xl font-bold text-zinc-900 leading-none tabular-nums">{arrTime}</div>
+            <div className="text-[11px] font-semibold text-zinc-400 uppercase tracking-widest mt-1">{getDestLabel(flight, context)}</div>
           </div>
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
-          <div>
-            <span className="text-2xl font-black text-red-600">${flight.price}</span>
-            <span className="text-sm text-zinc-400 ml-1 font-medium">+ ${flight.tax} tax</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-xl font-bold text-zinc-900">${flight.price}</span>
+            <span className="text-xs text-zinc-400 font-medium">+ ${flight.tax} tax</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-zinc-400 font-medium">{getSeats(flight)} seats</span>
-            <div className="flex items-center gap-1 bg-red-600 hover:bg-red-700 text-white text-sm font-black uppercase tracking-wider px-3 py-1.5 rounded-lg transition-colors">
+            <div className="flex items-center gap-1 text-xs text-zinc-400 font-medium">
+              <Clock className="w-3 h-3" />
+              {getSeats(flight)} seats
+            </div>
+            <div className="flex items-center gap-1 bg-zinc-900 group-hover:bg-red-600 text-white text-xs font-semibold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-colors duration-200">
               Select <ChevronRight className="w-3 h-3" />
             </div>
           </div>
@@ -261,16 +263,16 @@ function ClassModal({ flight, context, submitting, selectedFareId, onClose, onSe
         onClick={(e) => e.stopPropagation()}
         className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
       >
-        {/* Red header */}
-        <div className="bg-red-600 px-5 py-4 flex items-start justify-between">
+        {/* Header */}
+        <div className="bg-zinc-900 px-5 py-4 flex items-start justify-between">
           <div>
-            <h3 className="text-lg font-black text-white uppercase tracking-wide">Choose Fare Class</h3>
-            <p className="text-red-200 text-sm mt-0.5 font-bold">
-              {getOriginLabel(flight, context)} → {getDestLabel(flight, context)} · {flight.flight_number || flight.flight_code}
+            <h3 className="text-base font-bold text-white tracking-wide">Select Fare Class</h3>
+            <p className="text-zinc-400 text-sm mt-0.5 font-medium">
+              {getOriginLabel(flight, context)} → {getDestLabel(flight, context)} · <span className="font-mono">{flight.flight_number || flight.flight_code}</span>
             </p>
           </div>
           <button onClick={onClose} disabled={submitting}
-            className="p-1.5 rounded-lg bg-red-700/50 hover:bg-red-700 text-white transition-colors">
+            className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -610,12 +612,14 @@ function WeightStepper({ items, bookingId, flightId, paxNum, onAdded, onError }:
   );
 }
 
-function AncillaryResults({ data, paxCount, onItemAdded, onError, onContinue }: {
+function AncillaryResults({ data, paxCount, onItemAdded, onError, onContinue, label, onCheckReturnFlight }: {
   data: AncillaryResponse;
   paxCount: number;
   onItemAdded: (item: AncillaryItem) => void;
   onError: (msg: string) => void;
   onContinue: () => void;
+  label?: string;
+  onCheckReturnFlight?: () => void;
 }) {
   const [activePax, setActivePax] = useState(0);
 
@@ -634,12 +638,12 @@ function AncillaryResults({ data, paxCount, onItemAdded, onError, onContinue }: 
   return (
     <div className="p-4 space-y-4">
       {/* Header banner */}
-      <div className="bg-red-600 rounded-xl px-4 py-3 flex items-center justify-between">
+      <div className="bg-zinc-900 rounded-xl px-4 py-3 flex items-center justify-between">
         <div>
-          <div className="text-white font-black text-base uppercase tracking-wide">Extras & Add-ons</div>
-          <div className="text-red-200 text-xs mt-0.5 font-bold">{data.available_count} option{data.available_count !== 1 ? "s" : ""} available</div>
+          <div className="text-white font-bold text-sm tracking-wide">{label || "Extras & Add-ons"}</div>
+          <div className="text-zinc-400 text-xs mt-0.5 font-medium">{data.available_count} option{data.available_count !== 1 ? "s" : ""} available</div>
         </div>
-        <Luggage className="w-5 h-5 text-white/60" />
+        <Luggage className="w-4 h-4 text-zinc-500" />
       </div>
 
       {/* Passenger tabs — only if more than 1 passenger */}
@@ -691,14 +695,24 @@ function AncillaryResults({ data, paxCount, onItemAdded, onError, onContinue }: 
         </div>
       ))}
 
-      {/* Continue button */}
-      <button
-        onClick={onContinue}
-        className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-black text-sm uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-md"
-      >
-        Continue
-        <ChevronRight className="w-4 h-4" />
-      </button>
+      {/* Continue / Return Flight Extras button */}
+      {onCheckReturnFlight ? (
+        <button
+          onClick={onCheckReturnFlight}
+          className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-sm uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-md"
+        >
+          Return Flight Extras
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      ) : (
+        <button
+          onClick={onContinue}
+          className="w-full py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-black text-sm uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-md"
+        >
+          Continue
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
     </div>
   );
 }
@@ -792,12 +806,15 @@ function PassengerForm({ paxCount, bookingId, fromCode, toCode, onSuccess, onErr
           className="bg-white rounded-2xl shadow-xl overflow-hidden border border-zinc-200 max-w-[640px] mx-auto"
         >
           {/* Top strip */}
-          <div className="bg-red-600 px-6 py-2 flex items-center justify-between">
-            <span className="text-white/70 text-[10px] font-black uppercase tracking-[0.25em]">Boarding Pass</span>
+          <div className="bg-zinc-900 px-6 py-2.5 flex items-center justify-between">
+            <span className="text-zinc-400 text-[10px] font-semibold uppercase tracking-[0.25em]">Booking Confirmation</span>
             <span className={cn(
-              "text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full",
-              status === "OK" ? "bg-white/20 text-white" : "bg-yellow-500/20 text-yellow-200"
-            )}>{status === "OK" ? "✓ Confirmed" : status}</span>
+              "flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full",
+              status === "OK" ? "bg-red-600 text-white" : "bg-yellow-500/20 text-yellow-300"
+            )}>
+              {status === "OK" && <Check className="w-3 h-3" />}
+              {status === "OK" ? "Confirmed" : status}
+            </span>
           </div>
 
           {/* Main body — horizontal layout */}
@@ -901,12 +918,12 @@ function PassengerForm({ paxCount, bookingId, fromCode, toCode, onSuccess, onErr
   return (
     <div className="p-4 space-y-3">
       {/* Header */}
-      <div className="bg-red-600 rounded-xl px-4 py-3 flex items-center justify-between">
+      <div className="bg-zinc-900 rounded-xl px-4 py-3 flex items-center justify-between">
         <div>
-          <div className="text-white font-black text-base uppercase tracking-wide">Passenger Details</div>
-          <div className="text-red-200 text-xs mt-0.5 font-bold">{totalPax} passenger{totalPax !== 1 ? "s" : ""} · Booking #{bookingId}</div>
+          <div className="text-white font-bold text-sm tracking-wide">Passenger Details</div>
+          <div className="text-zinc-400 text-xs mt-0.5 font-medium">{totalPax} passenger{totalPax !== 1 ? "s" : ""} · Booking #{bookingId}</div>
         </div>
-        <User className="w-5 h-5 text-white/60" />
+        <User className="w-4 h-4 text-zinc-500" />
       </div>
 
       {/* Passenger tabs */}
@@ -987,47 +1004,117 @@ function PassengerForm({ paxCount, bookingId, fromCode, toCode, onSuccess, onErr
 
 // ─── Flight Results ───────────────────────────────────────────────────────────
 
-function FlightResults({ data, outboundSelected, onFlightClick }: {
+function FlightResults({ data, outboundSelection, onFlightClick }: {
   data: FlightResponse;
-  outboundSelected: boolean;
+  outboundSelection: { flight: Flight; cls: FlightClass } | null;
   onFlightClick: (flight: Flight, ctx: BookingContext) => void;
 }) {
   const outbound = data.data.filter((f) => f.direction === "Outbound");
   const inbound = data.data.filter((f) => f.direction === "Return");
   const isRT = data.context.triptype === "RT";
-  // Disable return cards if RT and outbound not yet selected
-  const returnDisabled = isRT && !outboundSelected;
+  const step = isRT ? (outboundSelection ? 2 : 1) : 0;
 
   return (
     <div className="p-4 space-y-4">
-      <div className="bg-red-600 rounded-xl px-4 py-3 flex items-center justify-between">
+      {/* Header */}
+      <div className="bg-zinc-900 rounded-xl px-4 py-3 flex items-center justify-between">
         <div>
-          <div className="text-white font-black text-base uppercase tracking-wide">{data.header}</div>
-          <div className="text-red-200 text-sm mt-0.5 font-bold">{data.sub_header}</div>
+          <div className="flex items-center gap-2">
+            <Plane className="w-4 h-4 text-red-500 rotate-90 flex-shrink-0" />
+            <div className="text-white font-bold text-base tracking-wide">
+              {data.context.from_code} <span className="text-zinc-500 mx-0.5">→</span> {data.context.to_code}
+            </div>
+          </div>
+          <div className="text-zinc-400 text-xs mt-1 font-medium">{data.sub_header}</div>
         </div>
-        <Plane className="w-5 h-5 text-white/60 rotate-90" />
+        {isRT ? (
+          <div className="flex items-center gap-1.5">
+            <div className={cn(
+              "w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold border transition-all duration-300",
+              step === 1 ? "bg-red-600 text-white border-red-600" : "bg-zinc-700 text-zinc-400 border-zinc-700"
+            )}>
+              {step > 1 ? <Check className="w-3 h-3" /> : "1"}
+            </div>
+            <div className={cn("w-6 h-px transition-all duration-500", step === 2 ? "bg-red-600" : "bg-zinc-700")} />
+            <div className={cn(
+              "w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold border transition-all duration-300",
+              step === 2 ? "bg-red-600 text-white border-red-600" : "bg-zinc-700 text-zinc-400 border-zinc-700"
+            )}>
+              2
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {outbound.length > 0 && (
-        <div className="space-y-2.5">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-600 px-1">Outbound Flights</p>
-          {outbound.map((f, i) => (
-            <FlightCard key={i} flight={f} context={data.context} onClick={() => onFlightClick(f, data.context)} />
-          ))}
-        </div>
-      )}
+      {/* Outbound confirmed summary — shown once user advances to step 2 */}
+      <AnimatePresence>
+        {step === 2 && outboundSelection && (
+          <motion.div
+            key="outbound-confirmed"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-3"
+          >
+            <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
+              <Check className="w-4 h-4 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-600 mb-0.5">Outbound Selected</p>
+              <p className="text-sm font-medium text-zinc-800 truncate">
+                {getOriginLabel(outboundSelection.flight, data.context)}
+                <ArrowRight className="inline w-3 h-3 mx-1 text-zinc-400" />
+                {getDestLabel(outboundSelection.flight, data.context)}
+                <span className="font-mono text-zinc-400 text-xs ml-2">
+                  {getDepTime(outboundSelection.flight).slice(-5)}
+                </span>
+              </p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <div className="text-base font-bold text-zinc-900">${outboundSelection.cls.fare.adultFare}</div>
+              <div className="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">{outboundSelection.cls.className}</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {inbound.length > 0 && (
-        <div className="space-y-2.5">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-600 px-1">
-            Return Flights
-            {returnDisabled && <span className="text-zinc-400 ml-2 normal-case tracking-normal font-bold">— select an outbound flight first</span>}
-          </p>
-          {inbound.map((f, i) => (
-            <FlightCard key={i} flight={f} context={data.context} disabled={returnDisabled} onClick={() => onFlightClick(f, data.context)} />
-          ))}
-        </div>
-      )}
+      {/* Flight list — slides between outbound (step 1) and inbound (step 2) */}
+      <AnimatePresence mode="wait">
+        {step !== 2 ? (
+          <motion.div
+            key="outbound-list"
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.22 }}
+            className="space-y-2.5"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400 px-1">
+              {isRT ? "Step 1 of 2 — Outbound" : "Available Flights"}
+            </p>
+            {outbound.map((f, i) => (
+              <FlightCard key={i} flight={f} context={data.context} onClick={() => onFlightClick(f, data.context)} />
+            ))}
+          </motion.div>
+        ) : (
+          <motion.div
+            key="inbound-list"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
+            transition={{ duration: 0.22 }}
+            className="space-y-2.5"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400 px-1">
+              Step 2 of 2 — Return
+            </p>
+            {inbound.map((f, i) => (
+              <FlightCard key={i} flight={f} context={data.context} onClick={() => onFlightClick(f, data.context)} />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1057,6 +1144,8 @@ export default function Home() {
   // Passenger form state
   const [activeBookingId, setActiveBookingId] = useState<number | null>(null);
   const [showPassengerForm, setShowPassengerForm] = useState(false);
+  // RT ancillary: hold return flight ID until user requests return-flight extras
+  const [rtReturnFlightId, setRtReturnFlightId] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1144,17 +1233,25 @@ export default function Home() {
       const res = await axios.post("http://127.0.0.1:8000/book-flight", bookingPayload);
       const meta = res.data?._meta || {};
       const bookingId = meta.booking_id;
-      const pnr = meta.pnr || "N/A";
+      const pnr = meta.pnr && meta.pnr !== "N/A" ? meta.pnr : null;
       setSelectedFlight(null);
       setSubmittingFare(false);
       setOutboundSelection(null);
       if (bookingId) setActiveBookingId(bookingId);
-      setShowPassengerForm(false); // Reset for new booking
+      setShowPassengerForm(false);
+      if (!pnr) {
+        addToast("info", "Booking Registered", "Waiting for PNR confirmation — try again shortly.");
+        return;
+      }
       addToast("success", "Flight Booked!", `PNR: ${pnr}`);
       setIsLoading(true);
       try {
         const primaryFlightId = isRT && outboundSelection ? outboundSelection.cls.flightid : cls.flightid;
-        const trigger = `__booking__: Flight booked. PNR: ${pnr}. BookingID: ${bookingId}. FlightID: ${primaryFlightId}. Immediately call check_ancillaries with BookingID ${bookingId} and FlightID ${primaryFlightId}, then collect passenger details.`;
+        const returnFlightId = isRT ? cls.flightid : null;
+        if (returnFlightId) setRtReturnFlightId(returnFlightId);
+        const trigger = isRT && returnFlightId
+          ? `__booking__: Round-trip flight booked. PNR: ${pnr}. BookingID: ${bookingId}. FlightID: ${primaryFlightId}. This is the outbound flight. Immediately call check_ancillaries with BookingID ${bookingId} and FlightID ${primaryFlightId} only. Do not ask about the return flight yet.`
+          : `__booking__: Flight booked. PNR: ${pnr}. BookingID: ${bookingId}. FlightID: ${primaryFlightId}. Immediately call check_ancillaries with BookingID ${bookingId} and FlightID ${primaryFlightId}, then collect passenger details.`;
         const { response, flightResults, ancillaryResults } = await sendToBot(trigger);
         setMessages((prev) => [...prev, {
           id: (Date.now() + 1).toString(), role: "assistant",
@@ -1175,6 +1272,24 @@ export default function Home() {
 
   const [addedAncillaries, setAddedAncillaries] = useState<string[]>([]);
 
+  const handleCheckReturnAncillaries = async () => {
+    if (!rtReturnFlightId || !activeBookingId) return;
+    const flightId = rtReturnFlightId;
+    setIsLoading(true);
+    try {
+      const trigger = `Now check ancillaries for the return flight. BookingID: ${activeBookingId}. FlightID: ${flightId}. Call check_ancillaries with BookingID ${activeBookingId} and FlightID ${flightId} only — do not repeat the outbound check.`;
+      const { response, flightResults, ancillaryResults } = await sendToBot(trigger);
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(), role: "assistant",
+        content: response, timestamp: new Date(), flightResults, ancillaryResults,
+      }]);
+    } catch {
+      addToast("error", "Couldn't load return flight extras", "Please type something to continue.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const renderMessageContent = (msg: Message) => {
     if (msg.role === "assistant" && msg.flightResults) {
       return (
@@ -1184,7 +1299,7 @@ export default function Home() {
           )}
           <FlightResults
             data={msg.flightResults}
-            outboundSelected={!!outboundSelection}
+            outboundSelection={outboundSelection}
             onFlightClick={(f, ctx) => { setSelectedFlight(f); setFlightContext(ctx); setSelectedFareId(null); }}
           />
         </>
@@ -1198,20 +1313,30 @@ export default function Home() {
           {msg.content && (
             <div className="px-4 pt-3 pb-1 text-base leading-relaxed text-zinc-700 font-medium">{msg.content}</div>
           )}
-          {!showPassengerForm && (
-            <AncillaryResults
-              data={msg.ancillaryResults}
-              paxCount={paxCount}
-              onItemAdded={(item) => {
-                setAddedAncillaries((prev) => [...prev, String(item.itemid)]);
-                addToast("success", "Extra Added!", item.name);
-              }}
-              onError={(errMsg) => addToast("error", "Add Failed", errMsg)}
-              onContinue={() => {
-                setShowPassengerForm(true);
-              }}
-            />
-          )}
+          {!showPassengerForm && (() => {
+            const lastAncillaryMsg = [...messages].reverse().find(m => m.ancillaryResults);
+            const isLastAncillary = msg.id === lastAncillaryMsg?.id;
+            const isOutbound = rtReturnFlightId !== null && msg.ancillaryResults.flight_id !== rtReturnFlightId;
+            const ancillaryLabel = rtReturnFlightId !== null
+              ? (isOutbound ? "Outbound Flight Extras" : "Return Flight Extras")
+              : "Extras & Add-ons";
+            return (
+              <AncillaryResults
+                data={msg.ancillaryResults}
+                paxCount={paxCount}
+                label={ancillaryLabel}
+                onCheckReturnFlight={isLastAncillary && isOutbound ? handleCheckReturnAncillaries : undefined}
+                onItemAdded={(item) => {
+                  setAddedAncillaries((prev) => [...prev, String(item.itemid)]);
+                  addToast("success", "Extra Added!", item.name);
+                }}
+                onError={(errMsg) => addToast("error", "Add Failed", errMsg)}
+                onContinue={() => {
+                  setShowPassengerForm(true);
+                }}
+              />
+            );
+          })()}
           {showPassengerForm && (msg.ancillaryResults.booking_id || activeBookingId) && (
             <PassengerForm
               paxCount={paxCount}
@@ -1235,6 +1360,19 @@ export default function Home() {
   return (
     <div className="flex flex-col h-screen bg-zinc-100 overflow-hidden font-sans">
 
+      {/* ── APP HEADER ── */}
+      <header className="flex-shrink-0 bg-white border-b border-zinc-200 px-4 h-14 flex items-center z-10">
+        <div className="max-w-2xl mx-auto w-full flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-red-600 flex items-center justify-center flex-shrink-0">
+              <Plane className="w-3.5 h-3.5 text-white rotate-90" />
+            </div>
+            <span className="text-sm font-bold text-zinc-900 tracking-wide">TravelLink</span>
+          </div>
+          <span className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest hidden sm:block">AI Flight Assistant</span>
+        </div>
+      </header>
+
       {/* ── MESSAGES ── */}
       <main className="flex-1 overflow-y-auto px-4 py-4 bg-zinc-100">
         <div className="max-w-2xl mx-auto space-y-3">
@@ -1242,18 +1380,21 @@ export default function Home() {
           {outboundSelection && (
             <motion.div
               initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-3 bg-red-600 text-white rounded-xl px-4 py-3 shadow-md"
+              className="flex items-center gap-3 bg-white border border-zinc-200 rounded-xl px-4 py-3 shadow-sm"
             >
-              <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+              <div className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              </div>
               <div className="flex-1">
-                <div className="font-black text-sm uppercase tracking-wide">Outbound Selected</div>
-                <div className="text-red-200 text-xs font-bold mt-0.5">
-                  Flight {outboundSelection.flight.flight_number || outboundSelection.flight.flight_code} · {outboundSelection.cls.className} — Now pick a return flight
+                <div className="font-semibold text-sm text-zinc-900">Outbound selected — now pick your return flight</div>
+                <div className="text-zinc-400 text-xs mt-0.5">
+                  <span className="font-mono">{outboundSelection.flight.flight_number || outboundSelection.flight.flight_code}</span>
+                  {" · "}{outboundSelection.cls.className}{" · "}${outboundSelection.cls.fare.adultFare}
                 </div>
               </div>
               <button
                 onClick={() => setOutboundSelection(null)}
-                className="p-1 rounded-lg bg-red-700/50 hover:bg-red-700 transition-colors"
+                className="p-1 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-400 transition-colors"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -1270,24 +1411,24 @@ export default function Home() {
               >
                 {/* Avatar */}
                 <div className={cn(
-                  "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mb-1 shadow-sm",
-                  msg.role === "assistant" ? "bg-red-600" : "bg-zinc-900"
+                  "w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mb-1",
+                  msg.role === "assistant" ? "bg-zinc-900" : "bg-zinc-700"
                 )}>
                   {msg.role === "assistant"
-                    ? <Plane className="w-4 h-4 text-white rotate-90" />
-                    : <User className="w-4 h-4 text-white" />}
+                    ? <Plane className="w-3.5 h-3.5 text-white rotate-90" />
+                    : <User className="w-3.5 h-3.5 text-white" />}
                 </div>
 
                 {/* Bubble */}
                 <div className={cn(
-                  "relative max-w-5xl rounded-2xl overflow-hidden shadow-sm",
+                  "relative max-w-5xl rounded-2xl overflow-hidden",
                   msg.role === "assistant"
-                    ? "bg-white border border-zinc-200 text-zinc-800 rounded-bl-sm"
+                    ? "bg-white border border-zinc-200 text-zinc-800 rounded-bl-sm shadow-sm"
                     : "bg-zinc-900 text-white rounded-br-sm"
                 )}>
                   {renderMessageContent(msg)}
                   <p className={cn(
-                    "text-xs opacity-40 font-semibold pb-2 px-4 uppercase tracking-wider",
+                    "text-[10px] opacity-50 font-medium pb-2 px-4",
                     msg.role === "user" ? "text-right text-zinc-300" : "text-zinc-400"
                   )}>
                     {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -1300,14 +1441,14 @@ export default function Home() {
           {/* Typing indicator */}
           {isLoading && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex items-end gap-2">
-              <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center shadow-sm">
-                <Plane className="w-4 h-4 text-white rotate-90" />
+              <div className="w-7 h-7 rounded-full bg-zinc-900 flex items-center justify-center">
+                <Plane className="w-3.5 h-3.5 text-white rotate-90" />
               </div>
               <div className="px-4 py-3 bg-white border border-zinc-200 rounded-2xl rounded-bl-sm shadow-sm">
-                <div className="flex gap-1.5 items-center h-4">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce [animation-delay:0ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce [animation-delay:150ms]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce [animation-delay:300ms]" />
+                <div className="flex gap-1 items-center h-4">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
                 </div>
               </div>
             </motion.div>
@@ -1318,21 +1459,15 @@ export default function Home() {
       </main>
 
       {/* ── INPUT BAR ── */}
-      <div className="flex-shrink-0 bg-white border-t-2 border-zinc-200 px-4 py-3">
+      <div className="flex-shrink-0 bg-white border-t border-zinc-200 px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center gap-2">
-          <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-400 font-bold uppercase tracking-wider whitespace-nowrap">
-            <MapPin className="w-3 h-3 text-red-600" />
-            <span>Ask me</span>
-          </div>
-          <div className="w-px h-4 bg-zinc-200 hidden sm:block" />
-
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-            placeholder="Where would you like to fly?"
-            className="flex-1 bg-zinc-100 border-2 border-zinc-200 focus:border-red-600 outline-none rounded-xl px-4 py-2.5 text-base text-zinc-900 font-medium placeholder:text-zinc-400 transition-colors"
+            placeholder="Type a message..."
+            className="flex-1 bg-zinc-50 border border-zinc-200 focus:border-zinc-400 outline-none rounded-xl px-4 py-2.5 text-sm text-zinc-900 font-medium placeholder:text-zinc-400 transition-colors"
             disabled={isLoading}
           />
 
@@ -1341,10 +1476,10 @@ export default function Home() {
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
             className={cn(
-              "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold uppercase tracking-wider text-base transition-all flex-shrink-0",
+              "flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex-shrink-0",
               input.trim() && !isLoading
-                ? "bg-red-600 hover:bg-red-700 text-white shadow-md shadow-red-200"
-                : "bg-zinc-200 text-zinc-400 cursor-not-allowed"
+                ? "bg-red-600 hover:bg-red-700 text-white shadow-sm"
+                : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
             )}
           >
             {isLoading

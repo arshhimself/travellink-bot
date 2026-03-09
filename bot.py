@@ -255,8 +255,8 @@ def check_flight_availability(
 
     return {
         "type": "flight_results",
-        "header": f"✈️  {from_code} → {to_code}",
-        "sub_header": f"👥 {adults} Adult(s)" + (f", {children} Child(ren)" if children else "") + (f", {infants} Infant(s)" if infants else ""),
+        "header": f"{from_code} → {to_code}",
+        "sub_header": f"{adults} Adult{'' if adults == 1 else 's'}" + (f", {children} Child{'ren' if children != 1 else ''}" if children else "") + (f", {infants} Infant{'' if infants == 1 else 's'}" if infants else ""),
         "context": {
             "from_code": from_code,
             "to_code": to_code,
@@ -536,6 +536,7 @@ Your job now: collect flight details — departure city, arrival city, travel da
 - If user says a city, call `search_destinations` to validate it and get the airport code.
 - If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
 - Never assume adults=1 unless they explicitly said "just me" / "solo" / "1 adult".
+- If the user gives an ambiguous date (just a number like "29", or a day without a month like "the 5th"), ask once to confirm the month before proceeding. Do not guess.
 - If round trip, also ask for return date. The return date MUST be on or after the departure date — if the user gives a return date before the outbound date, politely tell them and ask for a valid return date.
 - Once you have ALL details, confirm them with the user before proceeding.""",
 

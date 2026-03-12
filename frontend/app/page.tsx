@@ -1002,7 +1002,7 @@ function PassengerForm({ paxCount, bookingId, fromCode, toCode, onSuccess, onErr
   );
 }
 
-// ─── Flight Results ───────────────────────────────────────────────────────────
+
 
 function FlightResults({ data, outboundSelection, onFlightClick }: {
   data: FlightResponse;
@@ -1147,10 +1147,15 @@ export default function Home() {
   // RT ancillary: hold return flight ID until user requests return-flight extras
   const [rtReturnFlightId, setRtReturnFlightId] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!isLoading) inputRef.current?.focus();
+  }, [isLoading]);
 
   const addToast = useCallback((type: ToastType, title: string, message?: string) => {
     const id = Date.now().toString();
@@ -1462,6 +1467,8 @@ export default function Home() {
       <div className="flex-shrink-0 bg-white border-t border-zinc-200 px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center gap-2">
           <input
+            ref={inputRef}
+            autoFocus
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}

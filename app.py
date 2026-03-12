@@ -177,6 +177,31 @@ def read_root():
     return {"message": "Flight Bot API is running"}
 
 
+class ResetRequest(BaseModel):
+    thread_id: Optional[str] = "default_thread"
+
+
+@app.post("/reset-chat")
+def reset_chat(request: ResetRequest):
+    """
+    Clear the conversation thread so the user can start completely fresh.
+    Recreates the graph to clear MemorySaver state for this thread.
+    """
+    global graph
+    try:
+        # Recreate the graph to clear all in-memory state
+        graph = create_graph()
+        print(f"[RESET] Thread '{request.thread_id}' — graph recreated")
+        return {
+            "success": True,
+            "thread_id": request.thread_id,
+            "message": "Conversation reset. Ready for a new search!"
+        }
+    except Exception as e:
+        print(f"[RESET ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(request: ChatRequest):
     """

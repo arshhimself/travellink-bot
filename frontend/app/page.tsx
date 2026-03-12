@@ -1146,6 +1146,7 @@ export default function Home() {
   const [showPassengerForm, setShowPassengerForm] = useState(false);
   // RT ancillary: hold return flight ID until user requests return-flight extras
   const [rtReturnFlightId, setRtReturnFlightId] = useState<number | null>(null);
+  const [addedAncillaries, setAddedAncillaries] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1154,8 +1155,12 @@ export default function Home() {
   }, [messages]);
 
   useEffect(() => {
-    if (!isLoading) inputRef.current?.focus();
-  }, [isLoading]);
+    if (!isLoading) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+    }
+  }, [isLoading, messages]);
 
   const addToast = useCallback((type: ToastType, title: string, message?: string) => {
     const id = Date.now().toString();
@@ -1174,8 +1179,33 @@ export default function Home() {
     };
   }, []);
 
+  const resetBookingState = useCallback(() => {
+    setSelectedFlight(null);
+    setFlightContext(null);
+    setSelectedFareId(null);
+    setSubmittingFare(false);
+    setOutboundSelection(null);
+    setActiveBookingId(null);
+    setShowPassengerForm(false);
+    setRtReturnFlightId(null);
+    setAddedAncillaries([]);
+  }, []);
+
+  const CANCEL_RESTART_KEYWORDS = [
+    "cancel", "start over", "start again", "new search", "new flight",
+    "different flight", "restart", "reset", "forget it", "never mind",
+    "begin again", "from scratch", "changed my mind",
+  ];
+
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
+
+    // Detect cancel/restart intent and clear booking state
+    const lower = text.toLowerCase();
+    if (CANCEL_RESTART_KEYWORDS.some((kw) => lower.includes(kw))) {
+      resetBookingState();
+    }
+
     setMessages((prev) => [...prev, {
       id: Date.now().toString(), role: "user", content: text, timestamp: new Date(),
     }]);
@@ -1195,7 +1225,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, sendToBot]);
+  }, [isLoading, sendToBot, resetBookingState]);
 
   const handleSend = () => { sendMessage(input); setInput(""); };
 
@@ -1275,7 +1305,7 @@ export default function Home() {
     }
   };
 
-  const [addedAncillaries, setAddedAncillaries] = useState<string[]>([]);
+
 
   const handleCheckReturnAncillaries = async () => {
     if (!rtReturnFlightId || !activeBookingId) return;
@@ -1475,7 +1505,6 @@ export default function Home() {
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
             placeholder="Type a message..."
             className="flex-1 bg-zinc-50 border border-zinc-200 focus:border-zinc-400 outline-none rounded-xl px-4 py-2.5 text-sm text-zinc-900 font-medium placeholder:text-zinc-400 transition-colors"
-            disabled={isLoading}
           />
 
           <motion.button

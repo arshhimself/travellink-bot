@@ -185,27 +185,7 @@ def check_flight_availability(
         if ret_date < dep_date:
             return {"error": f"Return date ({ret_date}) cannot be before departure date ({dep_date}). Please pick a return date on or after {dep_date}."}
 
-    end_date = (datetime.strptime(dep_date, "%Y/%m/%d") + timedelta(days=7)).strftime("%Y/%m/%d")
-
-    # Availability check
-    try:
-        payload = {
-            "aerocrs": {
-                "parms": {
-                    "dates": {"start": dep_date, "end": end_date},
-                    "destinations": {"from": from_code, "to": to_code}
-                }
-            }
-        }
-        avail_r = requests.post(f"{BASE_URL}/getAvailability", headers=_get_headers(), json=payload)
-        avail_data = avail_r.json()
-        count = avail_data["aerocrs"]["flights"]["count"]
-        if count == 0:
-            return {"error": f"No flights available from {from_code} to {to_code} around {dep_date}. Try different dates."}
-    except Exception as e:
-        return {"error": f"Availability check failed: {e}"}
-
-    # Fetch deeplink flights
+    # Fetch flights directly via deeplink API
     try:
         params = {
             "from": from_code, "to": to_code,
@@ -220,9 +200,41 @@ def check_flight_availability(
         query = "&".join(f"{k}={v}" for k, v in params.items())
         dl_r = requests.get(f"{BASE_URL}/getDeepLink?{query}", headers=_get_headers())
         data = dl_r.json()
-        flights = data["aerocrs"]["flights"]["flight"]
+        print(f"[DEEPLINK] Response keys: {list(data.get('aerocrs', {}).get('flights', {}).keys())}")
+
+        flights_raw = data.get("aerocrs", {}).get("flights", {})
+        flight_list = flights_raw.get("flight", [])
+
+        # API sometimes returns a string message like "No flights available"
+        if isinstance(flight_list, str):
+            print(f"[DEEPLINK] API returned string instead of flights: {flight_list[:100]}")
+            return {"error": f"No flights found from {from_code} to {to_code} on {dep_date}. Try different dates."}
+
+        # Handle single flight (dict) vs list
+        if isinstance(flight_list, dict):
+            flight_list = [flight_list]
+
+        if not flight_list:
+            return {"error": f"No flights found from {from_code} to {to_code} on {dep_date}. Try different dates."}
+
+        flights = flight_list
     except Exception as e:
         return {"error": f"Could not retrieve flight details: {e}"}
+
+    # Debug: log raw structure of first flight
+    if flights:
+        sample = flights[0]
+        if isinstance(sample, dict):
+            print(f"[DEEPLINK] Sample flight keys: {list(sample.keys())}")
+            classes_sample = sample.get("classes")
+            print(f"[DEEPLINK] Classes type: {type(classes_sample).__name__}, value preview: {str(classes_sample)[:200]}")
+        else:
+            print(f"[DEEPLINK] WARNING: flight entry is {type(sample).__name__}, not dict: {str(sample)[:200]}")
+
+    # Filter out non-dict entries (API sometimes returns strings)
+    flights = [f for f in flights if isinstance(f, dict)]
+    if not flights:
+        return {"error": f"No valid flight data from {from_code} to {to_code} on {dep_date}. Try different dates."}
 
     # Format results
     outbound = [f for f in flights if f.get("direction") == "outbound"]
@@ -232,7 +244,16 @@ def check_flight_availability(
     def process(flight_list, direction_label):
         for f in flight_list:
             try:
-                cheapest = min(f["classes"].values(), key=lambda c: float(c["fare"]["adultFare"]))
+                classes = f.get("classes", {})
+                if not isinstance(classes, dict):
+                    print(f"[DEEPLINK] Skipping flight — classes is {type(classes).__name__}: {str(classes)[:100]}")
+                    continue
+                # Filter to only dict class entries (skip string/int values)
+                valid_classes = {k: v for k, v in classes.items() if isinstance(v, dict)}
+                if not valid_classes:
+                    print(f"[DEEPLINK] Skipping flight — no valid class entries in: {list(classes.keys())}")
+                    continue
+                cheapest = min(valid_classes.values(), key=lambda c: float(c.get("fare", {}).get("adultFare", 99999)))
                 structured.append({
                     "direction": direction_label,
                     "flight_code": f.get("flightcode"),
@@ -245,13 +266,17 @@ def check_flight_availability(
                     "price": cheapest["fare"]["adultFare"],
                     "tax": cheapest["fare"]["tax"],
                     "seats_available": cheapest.get("freeseats"),
-                    "classes": f["classes"]
+                    "classes": valid_classes
                 })
-            except Exception:
+            except Exception as exc:
+                print(f"[DEEPLINK] Error processing flight: {exc}")
                 continue
 
     process(outbound, "Outbound")
     process(inbound, "Return")
+
+    if not structured:
+        return {"error": f"Flights exist but could not be parsed for {from_code} → {to_code} on {dep_date}. This may be a temporary issue."}
 
     return {
         "type": "flight_results",
@@ -464,17 +489,43 @@ def confirm_booking(
         return {"error": str(e)}
 
 
+@tool
+def cancel_booking(booking_id: int) -> dict:
+    """Cancel an existing booking.
+    Use this when the user explicitly asks to cancel their booking.
+    Args:
+        booking_id: The booking ID to cancel
+    Returns:
+        Cancellation result from the API, or a graceful message if cancellation is not supported.
+    """
+    try:
+        payload = {
+            "aerocrs": {
+                "parms": {
+                    "bookingid": booking_id
+                }
+            }
+        }
+        r = requests.post(f"{BASE_URL}/cancelBooking", headers=_get_headers(), json=payload)
+        result = r.json()
+        print(f"[CANCEL RESPONSE] {result}")
+        success = result.get("aerocrs", {}).get("success", False)
+        if success:
+            return {"cancelled": True, "booking_id": booking_id, "message": "Booking cancelled successfully."}
+        else:
+            detail = result.get("aerocrs", {}).get("details", "Unknown error")
+            return {"cancelled": False, "booking_id": booking_id, "error": str(detail)}
+    except Exception as e:
+        print(f"[CANCEL ERROR] {e}")
+        return {"cancelled": False, "booking_id": booking_id, "error": str(e),
+                "message": "Cancellation request could not be processed. The booking may need to be cancelled manually."}
 
-ALL_TOOLS = [search_destinations, check_flight_availability, check_ancillaries, add_ancillary, confirm_booking]
 
 
-PHASE_TOOLS = {
-    "gathering":    [search_destinations, check_flight_availability],
-    "searching":    [search_destinations, check_flight_availability],
-    "post_booking": [check_ancillaries, add_ancillary, confirm_booking],
-}
+ALL_TOOLS = [search_destinations, check_flight_availability, check_ancillaries, add_ancillary, confirm_booking, cancel_booking]
 
 
+# All tools available in every phase — prompts guide usage
 PHASE_MODEL = {
     "gathering":    llm_mini,
     "searching":    llm_mini,
@@ -484,16 +535,63 @@ PHASE_MODEL = {
 
 
 
+# Intent keywords for detecting restart / cancel signals
+_RESTART_KEYWORDS = [
+    "start over", "start again", "new search", "new flight", "search again",
+    "different flight", "change flight", "change my flight", "another flight",
+    "restart", "reset", "begin again", "fresh start", "from scratch",
+    "i changed my mind", "never mind", "forget it", "forget that",
+    "look for another", "search for another", "find another",
+    "want to book a different", "book something else",
+]
+
+_CANCEL_KEYWORDS = [
+    "cancel", "cancel my booking", "cancel the booking", "cancel it",
+    "don't want it", "dont want it", "cancel that", "undo booking",
+    "revoke", "void", "abort",
+]
+
+
+def _get_latest_user_text(messages: list) -> str:
+    """Return the latest user/human message text, lowercased."""
+    for msg in reversed(messages[-10:]):
+        if isinstance(msg, HumanMessage):
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                return content.lower().strip()
+    return ""
+
+
 def detect_phase(messages: list) -> str:
-    """Scan recent messages to determine conversation phase.
+    """Intent-aware phase detection.
+    
+    Checks the latest user message for restart/cancel signals FIRST,
+    then falls back to history-based detection.
+    If the most recent booking was cancelled, resets to gathering.
     
     Returns one of: 'gathering', 'searching', 'post_booking'
     """
-    has_booking_id = False
+    latest_text = _get_latest_user_text(messages)
+    
+    # ── Intent override: user wants to start over or search again ──
+    if any(kw in latest_text for kw in _RESTART_KEYWORDS):
+        print(f"[PHASE] Restart intent detected: {latest_text[:60]!r}")
+        return "gathering"
+    
+    # ── Intent override: user wants to cancel ──
+    # Still route to post_booking so the LLM has context + cancel_booking tool
+    if any(kw in latest_text for kw in _CANCEL_KEYWORDS):
+        print(f"[PHASE] Cancel intent detected: {latest_text[:60]!r}")
+        return "post_booking"
+    
+    # ── Default: history-based detection ──
+    # Track positions of key signals to determine latest state
+    last_booking_idx = -1
+    last_cancel_idx = -1
     has_flight_results = False
     
-    # Scan in reverse for efficiency — most recent signals matter most
-    for msg in reversed(messages[-20:]):
+    scan = messages[-20:]
+    for i, msg in enumerate(scan):
         content = getattr(msg, "content", "")
         if isinstance(content, dict):
             content = json.dumps(content)
@@ -502,21 +600,28 @@ def detect_phase(messages: list) -> str:
         
         content_lower = content.lower()
         
-        # BookingID in a system message = post-booking phase
         if isinstance(msg, SystemMessage) and "bookingid" in content_lower:
-            has_booking_id = True
+            last_booking_idx = i
         
-        # Flight results returned = we've already searched
+        # Detect successful cancellation
+        if isinstance(msg, ToolMessage) and '"cancelled": true' in content_lower:
+            last_cancel_idx = i
+        
         if '"type": "flight_results"' in content:
             has_flight_results = True
     
-    # Determine phase based on signals
-    if has_booking_id:
+    # If booking was cancelled after it was created, reset to gathering
+    if last_booking_idx >= 0 and last_cancel_idx > last_booking_idx:
+        print("[PHASE] Booking was cancelled — resetting to gathering")
+        return "gathering"
+    
+    if last_booking_idx >= 0:
         return "post_booking"
     if has_flight_results:
         return "searching"
     
     return "gathering"
+
 
 
 # ─────────────────────────────────────────────
@@ -527,20 +632,27 @@ _TODAY = datetime.today().strftime("%A, %B %d, %Y")
 
 _PROMPT_PREAMBLE = f"""You are a warm and natural flight booking assistant. Conversational, clear, friendly. No bullet lists unless necessary. Never robotic.
 Today: {_TODAY}
-CRITICAL: Be warm and brief. Ask ONE clarifying question at a time. Never make up airport codes."""
+CRITICAL: Be warm and brief. Ask ONE clarifying question at a time. Never make up airport codes. NEVER ask the user for an airport code. You MUST ALWAYS use the `search_destinations` tool to find the airport code yourself based on the city name the user provides."""
+
+_TRANSITION_INSTRUCTIONS = """
+
+IMPORTANT — HANDLING USER INTENT CHANGES:
+- If the user says "cancel", "cancel my booking", or similar: use `cancel_booking` with the BookingID, then let them know and offer to help search for a new flight.
+- If the user says "start over", "new search", "different flight", "I changed my mind", or similar: acknowledge warmly and immediately start collecting new flight details (departure city, arrival city, dates, passengers). Do NOT cling to old booking context.
+- Always be flexible. You are a helpful assistant, not a rigid step-by-step form. If the user wants to go back or change something, roll with it naturally."""
 
 PHASE_PROMPTS = {
-    "gathering": _PROMPT_PREAMBLE + """
+    "gathering": _PROMPT_PREAMBLE + _TRANSITION_INSTRUCTIONS + """
 
 Your job now: collect flight details — departure city, arrival city, travel date, passengers (adults/children/infants), one-way or round trip.
-- If user says a city, call `search_destinations` to validate it and get the airport code.
+- If the user provides a city, you MUST call `search_destinations` to find its airport code. Do NOT ask the user to provide the code.
 - If user says "one" for passengers, ask: "Just one adult, or do you have kids or infants too?"
 - Never assume adults=1 unless they explicitly said "just me" / "solo" / "1 adult".
 - If the user gives an ambiguous date (just a number like "29", or a day without a month like "the 5th"), ask once to confirm the month before proceeding. Do not guess.
 - If round trip, also ask for return date. The return date MUST be on or after the departure date — if the user gives a return date before the outbound date, politely tell them and ask for a valid return date.
 - Once you have ALL details, confirm them with the user before proceeding.""",
 
-    "searching": _PROMPT_PREAMBLE + """
+    "searching": _PROMPT_PREAMBLE + _TRANSITION_INSTRUCTIONS + """
 
 You have all flight details. Call `check_flight_availability` to fetch flights.
 - If a city needs re-validation, use `search_destinations`.
@@ -548,7 +660,7 @@ You have all flight details. Call `check_flight_availability` to fetch flights.
 - After calling the tool, say ONLY something brief like: "Here you go! Pick a flight and fare class from the cards."
 - Do NOT ask for passenger details yet — wait for a BookingID.""",
 
-    "post_booking": _PROMPT_PREAMBLE + """
+    "post_booking": _PROMPT_PREAMBLE + _TRANSITION_INSTRUCTIONS + """
 
 A booking has been created. Follow this EXACT order:
 1. Immediately call `check_ancillaries` with the BookingID and FlightID from the system message.
@@ -558,6 +670,8 @@ A booking has been created. Follow this EXACT order:
    "Almost there! Just need your full name, date of birth, phone number, and email."
 5. Once the user gives ALL details (firstname, lastname, birthdate, phone, email), call `confirm_booking`.
 6. Only announce success AFTER the tool returns a successful response.
+
+CANCELLATION: If the user asks to cancel, use `cancel_booking` with the BookingID from the conversation, then offer to help search for a new flight.
 
 ⚠️ CRITICAL: NEVER call `confirm_booking` with made-up or placeholder data like "John Doe".
 You MUST ask the user for their real name, birthdate, phone, and email BEFORE calling confirm_booking.
@@ -648,17 +762,16 @@ def conversation_node(state: FlightState) -> FlightState:
     else:
         window = trimmed[-6:]
 
-    # ── Phase-aware tool binding & model selection ──
+    # ── Phase-aware model selection — ALL tools in every phase ──
     phase = detect_phase(all_msgs)
-    phase_tools = PHASE_TOOLS.get(phase, ALL_TOOLS)
     phase_model = PHASE_MODEL.get(phase, llm_full)
     phase_prompt = PHASE_PROMPTS.get(phase, PHASE_PROMPTS["gathering"])
 
-    llm_with_phase_tools = phase_model.bind_tools(phase_tools)
+    llm_with_tools = phase_model.bind_tools(ALL_TOOLS)
 
-    print(f"[PHASE] {phase} | tools={[t.name for t in phase_tools]} | model={phase_model.model_name}")
+    print(f"[PHASE] {phase} | tools={[t.name for t in ALL_TOOLS]} | model={phase_model.model_name}")
 
-    response = llm_with_phase_tools.invoke([SystemMessage(content=phase_prompt)] + window)
+    response = llm_with_tools.invoke([SystemMessage(content=phase_prompt)] + window)
     return {"messages": [response]}
 
 
